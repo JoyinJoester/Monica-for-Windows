@@ -13,16 +13,26 @@ namespace Monica.Windows.Views
     {
         public SecureItemsViewModel ViewModel { get; }
         private readonly ISecurityService _securityService;
+        private IServiceScope _scope;
 
         public CardsPage()
         {
             this.InitializeComponent();
-            ViewModel = ((App)App.Current).Services.GetRequiredService<SecureItemsViewModel>();
-            _securityService = ((App)App.Current).Services.GetRequiredService<ISecurityService>();
+            
+            // Create a scope for this page instance
+            _scope = ((App)App.Current).Services.CreateScope();
+            ViewModel = _scope.ServiceProvider.GetRequiredService<SecureItemsViewModel>();
+            _securityService = _scope.ServiceProvider.GetRequiredService<ISecurityService>();
             
             // Load both Document and BankCard types
             ViewModel.Initialize(ItemType.Document);
             this.Loaded += CardsPage_Loaded;
+            this.Unloaded += CardsPage_Unloaded;
+        }
+
+        private void CardsPage_Unloaded(object sender, RoutedEventArgs e)
+        {
+            _scope?.Dispose();
         }
 
         private async void CardsPage_Loaded(object sender, RoutedEventArgs e)

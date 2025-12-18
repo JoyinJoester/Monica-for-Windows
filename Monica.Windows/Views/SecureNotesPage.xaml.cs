@@ -13,15 +13,25 @@ namespace Monica.Windows.Views
     {
         public SecureItemsViewModel ViewModel { get; }
         private readonly ISecurityService _securityService;
+        private IServiceScope _scope;
 
         public SecureNotesPage()
         {
             this.InitializeComponent();
-            ViewModel = ((App)App.Current).Services.GetRequiredService<SecureItemsViewModel>();
-            _securityService = ((App)App.Current).Services.GetRequiredService<ISecurityService>();
+            
+            // Create a scope for this page instance
+            _scope = ((App)App.Current).Services.CreateScope();
+            ViewModel = _scope.ServiceProvider.GetRequiredService<SecureItemsViewModel>();
+            _securityService = _scope.ServiceProvider.GetRequiredService<ISecurityService>();
             
             ViewModel.Initialize(ItemType.Note);
             this.Loaded += SecureNotesPage_Loaded;
+            this.Unloaded += SecureNotesPage_Unloaded;
+        }
+
+        private void SecureNotesPage_Unloaded(object sender, RoutedEventArgs e)
+        {
+            _scope?.Dispose();
         }
 
         private async void SecureNotesPage_Loaded(object sender, RoutedEventArgs e)

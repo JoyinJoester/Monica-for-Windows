@@ -17,14 +17,24 @@ namespace Monica.Windows.Views
         public PasswordListViewModel ViewModel { get; }
         private readonly ISecurityService _securityService;
         private object? _filterParameter;
+        private IServiceScope _scope;
 
         public PasswordListPage()
         {
             this.InitializeComponent();
-            ViewModel = ((App)App.Current).Services.GetRequiredService<PasswordListViewModel>();
-            _securityService = ((App)App.Current).Services.GetRequiredService<ISecurityService>();
+            
+            // Create a scope for this page instance
+            _scope = ((App)App.Current).Services.CreateScope();
+            ViewModel = _scope.ServiceProvider.GetRequiredService<PasswordListViewModel>();
+            _securityService = _scope.ServiceProvider.GetRequiredService<ISecurityService>();
             
             this.Loaded += PasswordListPage_Loaded;
+            this.Unloaded += PasswordListPage_Unloaded;
+        }
+
+        private void PasswordListPage_Unloaded(object sender, RoutedEventArgs e)
+        {
+            _scope?.Dispose();
         }
 
         protected override void OnNavigatedTo(NavigationEventArgs e)

@@ -15,206 +15,124 @@ namespace Monica.Windows.Views
         public SecureItemsViewModel ViewModel { get; }
         private readonly ISecurityService _securityService;
         private DispatcherTimer _timer;
+        private IServiceScope _scope;
         
-        // Track UI elements for per-item updates
-        private readonly Dictionary<long, (TextBlock code, TextBlock time, ProgressRing progress)> _itemControls = new();
-
         public TotpPage()
         {
             this.InitializeComponent();
-            ViewModel = ((App)App.Current).Services.GetRequiredService<SecureItemsViewModel>();
-            _securityService = ((App)App.Current).Services.GetRequiredService<ISecurityService>();
+            
+            // Create a scope for this page instance to ensure fresh DbContext
+            _scope = ((App)App.Current).Services.CreateScope();
+            ViewModel = _scope.ServiceProvider.GetRequiredService<SecureItemsViewModel>();
+            _securityService = _scope.ServiceProvider.GetRequiredService<ISecurityService>();
             
             ViewModel.Initialize(ItemType.Totp);
             this.Loaded += TotpPage_Loaded;
             this.Unloaded += TotpPage_Unloaded;
 
             _timer = new DispatcherTimer();
-            _timer.Interval = TimeSpan.FromSeconds(1);
+            _timer.Interval = TimeSpan.FromMilliseconds(100); // Smooth 10fps updates
             _timer.Tick += Timer_Tick;
         }
 
         private async void TotpPage_Loaded(object sender, RoutedEventArgs e)
         {
+            _timer.Start();
+            
             LoadingRing.IsActive = true;
             await ViewModel.LoadDataAsync();
             LoadingRing.IsActive = false;
-            
-            _timer.Start();
         }
 
         private void TotpPage_Unloaded(object sender, RoutedEventArgs e)
         {
             _timer.Stop();
-            _itemControls.Clear();
+            _scope?.Dispose();
         }
 
         private void Timer_Tick(object sender, object e)
         {
-            // Traverse visual tree to find and update all progress rings directly
-            // This avoids issues with virtualization and control registration
-            FindChildren<ProgressRing>(TotpListView, pr =>
+            if (ViewModel.FilteredItems == null) return;
+
+            var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+            foreach (var item in ViewModel.FilteredItems)
             {
-                if (pr.Tag is SecureItem item)
+                UpdateItem(item, now);
+            }
+        }
+
+        private void UpdateItem(SecureItem item, long nowMs)
+        {
+            try
+            {
+                var data = GetTotpData(item);
+                if (data == null || string.IsNullOrEmpty(data.Secret)) return;
+
+                if (data.OtpType == "HOTP")
                 {
-                    UpdateItemProgress(pr, item);
+                    // HOTP: static code until counter increments
+                    if (string.IsNullOrEmpty(item.TotpCode) || item.TotpCode == "------")
+                    {
+                        item.TotpCode = TotpHelper.GenerateCode(data.Secret, data.Period, data.Digits, data.OtpType, data.Counter);
+                    }
+                    item.TotpTimeRemaining = "";
+                    item.TotpProgress = 100;
+                    return;
                 }
-            });
-            
-            FindChildren<TextBlock>(TotpListView, tb =>
-            {
-                if (tb.Tag is SecureItem item)
+
+                // TOTP: time-based
+                var period = data.Period > 0 ? data.Period : 30;
+                var periodMs = period * 1000L;
+                var currentPeriodStart = (nowMs / periodMs) * periodMs;
+                var elapsedMs = nowMs - currentPeriodStart;
+                var remainingMs = periodMs - elapsedMs;
+                var remainingSec = (int)Math.Ceiling(remainingMs / 1000.0);
+
+                // Update progress smoothly (percentage remaining)
+                item.TotpProgress = (remainingMs * 100.0) / periodMs;
+                item.TotpTimeRemaining = $"{remainingSec}s";
+
+                // Only regenerate code at period boundary (when remaining resets to ~period)
+                if (remainingSec >= period - 1 || string.IsNullOrEmpty(item.TotpCode) || item.TotpCode == "------")
                 {
-                    // Determine if this is code or time by checking current content format
-                    if (tb.FontFamily?.Source == "Consolas" || tb.FontSize >= 24)
-                    {
-                        UpdateItemCode(tb, item);
-                    }
-                    else if (tb.Text?.EndsWith("s") == true || tb.Text == "")
-                    {
-                        UpdateItemTime(tb, item);
-                    }
+                    item.TotpCode = TotpHelper.GenerateCode(data.Secret, data.Period, data.Digits, data.OtpType);
                 }
-            });
-        }
-
-        private void CodeText_Loaded(object sender, RoutedEventArgs e)
-        {
-            if (sender is TextBlock tb && tb.Tag is SecureItem item)
-            {
-                RegisterOrUpdateControl(item.Id, code: tb);
-                UpdateItemCode(tb, item);
             }
-        }
-
-        private void TimeRemaining_Loaded(object sender, RoutedEventArgs e)
-        {
-            if (sender is TextBlock tb && tb.Tag is SecureItem item)
+            catch
             {
-                RegisterOrUpdateControl(item.Id, time: tb);
-                UpdateItemTime(tb, item);
+                item.TotpCode = "Error";
             }
-        }
-
-        private void ItemProgress_Loaded(object sender, RoutedEventArgs e)
-        {
-            if (sender is ProgressRing pr && pr.Tag is SecureItem item)
-            {
-                RegisterOrUpdateControl(item.Id, progress: pr);
-                UpdateItemProgress(pr, item);
-            }
-        }
-
-        private void RegisterOrUpdateControl(long itemId, TextBlock? code = null, TextBlock? time = null, ProgressRing? progress = null)
-        {
-            if (!_itemControls.ContainsKey(itemId))
-            {
-                _itemControls[itemId] = (null!, null!, null!);
-            }
-
-            var current = _itemControls[itemId];
-            _itemControls[itemId] = (
-                code ?? current.code,
-                time ?? current.time,
-                progress ?? current.progress
-            );
-        }
-
-        private void UpdateItemDisplay(SecureItem item, TextBlock? codeBlock, TextBlock? timeBlock, ProgressRing? progressRing)
-        {
-            if (codeBlock != null) UpdateItemCode(codeBlock, item);
-            if (timeBlock != null) UpdateItemTime(timeBlock, item);
-            if (progressRing != null) UpdateItemProgress(progressRing, item);
         }
 
         private TotpData? GetTotpData(SecureItem item)
         {
+            // Use cached data if available
+            if (item.CachedTotpData is TotpData cached) return cached;
+
             try
             {
                 var decrypted = _securityService.Decrypt(item.ItemData);
                 if (string.IsNullOrEmpty(decrypted)) return null;
 
+                TotpData data;
                 try
                 {
-                    return System.Text.Json.JsonSerializer.Deserialize<TotpData>(decrypted);
+                    data = System.Text.Json.JsonSerializer.Deserialize<TotpData>(decrypted) ?? new TotpData();
                 }
                 catch
                 {
-                    // Legacy format: just the secret
-                    return new TotpData { Secret = decrypted, Period = 30, Digits = 6, OtpType = "TOTP" };
+                    // Legacy format
+                    data = new TotpData { Secret = decrypted, Period = 30, Digits = 6, OtpType = "TOTP" };
                 }
+                
+                // Cache it
+                item.CachedTotpData = data;
+                return data;
             }
             catch
             {
                 return null;
-            }
-        }
-
-        private void UpdateItemCode(TextBlock tb, SecureItem item)
-        {
-            try
-            {
-                var data = GetTotpData(item);
-                if (data != null && !string.IsNullOrEmpty(data.Secret))
-                {
-                    tb.Text = TotpHelper.GenerateCode(data.Secret, data.Period, data.Digits, data.OtpType);
-                }
-                else
-                {
-                    tb.Text = "------";
-                }
-            }
-            catch { tb.Text = "Error"; }
-        }
-
-        private void UpdateItemTime(TextBlock tb, SecureItem item)
-        {
-            try
-            {
-                var data = GetTotpData(item);
-                if (data != null && data.OtpType != "HOTP")
-                {
-                    var period = data.Period > 0 ? data.Period : 30;
-                    var remaining = TotpHelper.GetRemainingSeconds(period);
-                    tb.Text = $"{remaining}s";
-                }
-                else
-                {
-                    tb.Text = ""; // HOTP doesn't have time
-                }
-            }
-            catch { tb.Text = ""; }
-        }
-
-        private void UpdateItemProgress(ProgressRing pr, SecureItem item)
-        {
-            try
-            {
-                var data = GetTotpData(item);
-                if (data != null && data.OtpType != "HOTP")
-                {
-                    var period = data.Period > 0 ? data.Period : 30;
-                    var remaining = TotpHelper.GetRemainingSeconds(period);
-                    pr.Value = (remaining * 100.0) / period;
-                    pr.IsIndeterminate = false;
-                }
-                else
-                {
-                    pr.Value = 100;
-                    pr.IsIndeterminate = false;
-                }
-            }
-            catch { pr.Value = 0; }
-        }
-
-        private static void FindChildren<T>(DependencyObject parent, Action<T> action) where T : DependencyObject
-        {
-            int count = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChildrenCount(parent);
-            for (int i = 0; i < count; i++)
-            {
-                var child = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChild(parent, i);
-                if (child is T typed) action(typed);
-                FindChildren(child, action);
             }
         }
 
@@ -412,7 +330,6 @@ namespace Monica.Windows.Views
                 };
                 if (await dialog.ShowAsync() == ContentDialogResult.Primary)
                 {
-                    _itemControls.Remove(item.Id);
                     await ViewModel.DeleteItemAsync(item);
                 }
             }

@@ -11,7 +11,7 @@ namespace Monica.Windows.Services
         /// <summary>
         /// Generate OTP code with custom parameters
         /// </summary>
-        public static string GenerateCode(string secretKey, int period = 30, int digits = 6, string otpType = "TOTP")
+        public static string GenerateCode(string secretKey, int period = 30, int digits = 6, string otpType = "TOTP", long counter = 0)
         {
             try
             {
@@ -24,7 +24,7 @@ namespace Monica.Windows.Services
                 return otpType?.ToUpperInvariant() switch
                 {
                     "STEAM" => GenerateSteamCode(key),
-                    "HOTP" => GenerateHotpCode(key, 0), // For HOTP, counter should be passed externally
+                    "HOTP" => GenerateHotpCode(key, counter),
                     "MOTP" => "------", // mOTP requires PIN, handled separately
                     _ => GenerateTotpCode(key, period, digits)
                 };

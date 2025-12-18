@@ -61,11 +61,10 @@
                         
                         <!-- Icon with Progress Ring -->
                         <Grid Width="48" Height="48">
-                            <ProgressRing x:Name="ItemProgress" Width="48" Height="48" 
-                                          IsIndeterminate="False" Value="100" Maximum="100"
+                            <ProgressRing Width="48" Height="48" 
+                                          IsIndeterminate="False" Value="{x:Bind TotpProgress, Mode=OneWay}" Maximum="100"
                                           Background="{ThemeResource ControlFillColorSecondaryBrush}"
-                                          Foreground="{ThemeResource AccentFillColorDefaultBrush}"
-                                          Tag="{x:Bind}" Loaded="ItemProgress_Loaded"/>
+                                          Foreground="{ThemeResource AccentFillColorDefaultBrush}"/>
                             <FontIcon Glyph="&#xE8D7;" FontSize="18" 
                                       Foreground="{ThemeResource AccentFillColorDefaultBrush}"
                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
@@ -79,16 +78,14 @@
                         </StackPanel>
                         
                         <!-- Code Display -->
-                        <TextBlock Grid.Column="2" Text="------" FontSize="28" FontFamily="Consolas" 
+                        <TextBlock Grid.Column="2" Text="{x:Bind TotpCode, Mode=OneWay}" FontSize="28" FontFamily="Consolas" 
                                    FontWeight="Bold" VerticalAlignment="Center" Margin="0,0,8,0"
-                                   Foreground="{ThemeResource AccentFillColorDefaultBrush}"
-                                   Tag="{x:Bind}" Loaded="CodeText_Loaded"/>
+                                   Foreground="{ThemeResource AccentFillColorDefaultBrush}"/>
                         
                         <!-- Time Remaining -->
-                        <TextBlock Grid.Column="3" x:Name="TimeRemaining" Text="30s" 
+                        <TextBlock Grid.Column="3" Text="{x:Bind TotpTimeRemaining, Mode=OneWay}" 
                                    FontSize="14" VerticalAlignment="Center" Margin="0,0,8,0"
-                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                   Tag="{x:Bind}" Loaded="TimeRemaining_Loaded"/>
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
 
                         <StackPanel Grid.Column="4" Orientation="Horizontal" Spacing="4">
                              <Button ToolTipService.ToolTip="复制" Tag="{x:Bind}" Click="CopyButton_Click"

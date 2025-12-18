@@ -1,6 +1,7 @@
 using System;
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
+using CommunityToolkit.Mvvm.ComponentModel;
 
 namespace Monica.Windows.Models
 {
@@ -14,7 +15,7 @@ namespace Monica.Windows.Models
     }
 
     [Table("SecureItems")]
-    public class SecureItem
+    public partial class SecureItem : ObservableObject
     {
         [Key]
         [DatabaseGenerated(DatabaseGeneratedOption.Identity)]
@@ -34,5 +35,21 @@ namespace Monica.Windows.Models
         public DateTime UpdatedAt { get; set; } = DateTime.Now;
         public bool IsFavorite { get; set; }
         public int SortOrder { get; set; }
+
+        // TOTP Display Properties (Not Mapped)
+        [ObservableProperty]
+        [property: NotMapped]
+        private string _totpCode = "------";
+
+        [ObservableProperty]
+        [property: NotMapped]
+        private string _totpTimeRemaining = "";
+
+        [ObservableProperty]
+        [property: NotMapped]
+        private double _totpProgress = 0;
+
+        [NotMapped]
+        public object? CachedTotpData { get; set; }
     }
 }

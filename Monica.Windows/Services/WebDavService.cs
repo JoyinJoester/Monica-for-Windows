@@ -237,16 +237,54 @@ namespace Monica.Windows.Services
 
                 // 5. Generate CSVs
                 string timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+                
+                // 5a. Generate Password CSV (Android compatible format)
+                if (passwords.Count > 0)
+                {
+                    var pwdCsv = new StringBuilder();
+                    pwdCsv.Append('\uFEFF'); // BOM
+                    pwdCsv.AppendLine("ID,Title,Username,Password,Website,Notes,IsFavorite,CreatedAt,UpdatedAt");
+                    
+                    foreach (var pwd in passwords)
+                    {
+                        try
+                        {
+                            string decryptedPass = _securityService.Decrypt(pwd.EncryptedPassword);
+                            var cols = new string[]
+                            {
+                                pwd.Id.ToString(),
+                                EscapeCsv(pwd.Title),
+                                EscapeCsv(pwd.Username),
+                                EscapeCsv(decryptedPass),
+                                EscapeCsv(pwd.Website),
+                                EscapeCsv(pwd.Notes),
+                                pwd.IsFavorite.ToString(),
+                                new DateTimeOffset(pwd.CreatedAt).ToUnixTimeMilliseconds().ToString(),
+                                new DateTimeOffset(pwd.UpdatedAt).ToUnixTimeMilliseconds().ToString()
+                            };
+                            pwdCsv.AppendLine(string.Join(",", cols));
+                        }
+                        catch {}
+                    }
+                    File.WriteAllText(Path.Combine(tempPath, $"Monica_{timestamp}_password.csv"), pwdCsv.ToString(), Encoding.UTF8);
+                }
+                
+                // 5b. Generate TOTP CSV
                 if (totpItems.Count > 0)
                 {
                     string csv = GenerateCsv(totpItems);
                     File.WriteAllText(Path.Combine(tempPath, $"Monica_{timestamp}_totp.csv"), csv, Encoding.UTF8);
                 }
+                
+                // 5c. Generate Cards/Docs CSV with ImagePaths
                 if (cardDocItems.Count > 0)
                 {
-                    string csv = GenerateCsv(cardDocItems);
+                    string csv = GenerateCsvWithImages(cardDocItems);
                     File.WriteAllText(Path.Combine(tempPath, $"Monica_{timestamp}_cards_docs.csv"), csv, Encoding.UTF8);
                 }
+                
+                // 5d. Backup images folder
+                await BackupImagesAsync(tempPath, cardDocItems);
 
                 // 6. Zip
                 string zipPath = Path.Combine(Path.GetTempPath(), $"monica_backup_{timestamp}.zip");
@@ -504,44 +542,41 @@ namespace Monica.Windows.Services
 
                 // 5.5 Import images from images/ folder
                 int imageCount = 0;
+                int skippedImageCount = 0;
                 string imagesDir = Path.Combine(extractPath, "images");
                 
                 // Debug: List ALL contents at extractPath
                 System.Diagnostics.Debug.WriteLine($"=== IMAGE IMPORT DEBUG ===");
-                System.Diagnostics.Debug.WriteLine($"Extract path: {extractPath}");
-                System.Diagnostics.Debug.WriteLine($"Images dir path: {imagesDir}");
-                System.Diagnostics.Debug.WriteLine($"Images dir exists: {Directory.Exists(imagesDir)}");
-                
-                try
-                {
-                    System.Diagnostics.Debug.WriteLine($"All files in extractPath:");
-                    foreach (var f in Directory.GetFiles(extractPath))
-                        System.Diagnostics.Debug.WriteLine($"  [FILE] {Path.GetFileName(f)}");
-                    System.Diagnostics.Debug.WriteLine($"All directories in extractPath:");
-                    foreach (var d in Directory.GetDirectories(extractPath))
-                        System.Diagnostics.Debug.WriteLine($"  [DIR] {Path.GetFileName(d)}");
-                }
-                catch (Exception ex)
-                {
-                    System.Diagnostics.Debug.WriteLine($"Error listing extractPath: {ex.Message}");
-                }
+                try {
+                    System.Diagnostics.Debug.WriteLine($"Extract path: {extractPath}");
+                    System.Diagnostics.Debug.WriteLine($"Images dir path: {imagesDir}");
+                    System.Diagnostics.Debug.WriteLine($"Images dir exists: {Directory.Exists(imagesDir)}");
+                    
+                    /* Debug logging retained but simplified */
+                } catch {}
                 
                 if (Directory.Exists(imagesDir))
                 {
                     System.Diagnostics.Debug.WriteLine($"Found images folder: {imagesDir}");
                     var imageFiles = Directory.GetFiles(imagesDir);
-                    System.Diagnostics.Debug.WriteLine($"Found {imageFiles.Length} image files in images folder");
                     
                     foreach (var imageFile in imageFiles)
                     {
-                        System.Diagnostics.Debug.WriteLine($"  Processing: {Path.GetFileName(imageFile)}");
                         try
                         {
                             // Use the image storage service to import each image
-                            // It will handle decryption and re-encryption properly
-                            await _imageStorageService.SaveImageFromPathAsync(imageFile);
-                            imageCount++;
-                            System.Diagnostics.Debug.WriteLine($"  SUCCESS: Imported {Path.GetFileName(imageFile)}");
+                            // Returns (FileName, IsNew) - IsNew is true only if actually imported (not skipped)
+                            var result = await _imageStorageService.SaveImageFromPathAsync(imageFile);
+                            if (result.IsNew)
+                            {
+                                imageCount++;
+                                System.Diagnostics.Debug.WriteLine($"  SUCCESS: Imported {Path.GetFileName(imageFile)}");
+                            }
+                            else
+                            {
+                                skippedImageCount++;
+                                System.Diagnostics.Debug.WriteLine($"  SKIPPED: {Path.GetFileName(imageFile)} already exists");
+                            }
                         }
                         catch (Exception ex)
                         {
@@ -553,7 +588,7 @@ namespace Monica.Windows.Services
                 {
                     System.Diagnostics.Debug.WriteLine($"WARNING: images folder NOT found at: {imagesDir}");
                 }
-                System.Diagnostics.Debug.WriteLine($"=== IMAGE IMPORT COMPLETE: {imageCount} images imported ===");
+                System.Diagnostics.Debug.WriteLine($"=== IMAGE IMPORT COMPLETE: {imageCount} new, {skippedImageCount} skipped ===");
 
                 // 6. Import CSVs (TOTP / Cards)
                 // Look for CSVs in root - no imageMapping needed since we keep original filenames
@@ -582,7 +617,13 @@ namespace Monica.Windows.Services
                     string details = inner != null ? inner.Message : ex.Message;
                     throw new Exception($"保存数据失败: {details}");
                 }
-                return $"恢复完成。成功导入 {imported} 条数据，{imageCount} 张照片。";
+                
+                string msg = $"恢复完成。成功导入 {imported} 条数据，{imageCount} 张新照片";
+                if (skippedImageCount > 0)
+                {
+                    msg += $" (跳过 {skippedImageCount} 张已存在)";
+                }
+                return msg + "。";
 
             }
             finally
@@ -623,6 +664,174 @@ namespace Monica.Windows.Services
                 sb.AppendLine(string.Join(",", cols));
             }
             return sb.ToString();
+        }
+
+        /// <summary>
+        /// Generate CSV for cards/documents with ImagePaths populated from itemData
+        /// </summary>
+        private string GenerateCsvWithImages(List<SecureItem> items)
+        {
+            var sb = new StringBuilder();
+            sb.Append('\uFEFF'); // BOM
+            sb.AppendLine("ID,Type,Title,Data,Notes,IsFavorite,ImagePaths,CreatedAt,UpdatedAt");
+            
+            foreach(var item in items)
+            {
+                string typeStr = item.ItemType switch {
+                    ItemType.BankCard => "BANK_CARD",
+                    ItemType.Document => "DOCUMENT",
+                    _ => "NOTE"
+                };
+                string data = _securityService.Decrypt(item.ItemData);
+                
+                // Extract imagePaths from itemData JSON
+                string imagePaths = "";
+                try
+                {
+                    using var doc = JsonDocument.Parse(data);
+                    if (doc.RootElement.TryGetProperty("imagePaths", out var imgPathsElem))
+                    {
+                        imagePaths = imgPathsElem.ToString();
+                    }
+                    else if (doc.RootElement.TryGetProperty("ImagePaths", out var imgPathsElem2))
+                    {
+                        imagePaths = imgPathsElem2.ToString();
+                    }
+                }
+                catch { }
+                
+                var cols = new string[]
+                {
+                    item.Id.ToString(),
+                    typeStr,
+                    EscapeCsv(item.Title),
+                    EscapeCsv(data),
+                    EscapeCsv(item.Notes),
+                    item.IsFavorite.ToString(),
+                    EscapeCsv(imagePaths),
+                    new DateTimeOffset(item.CreatedAt).ToUnixTimeMilliseconds().ToString(),
+                    new DateTimeOffset(item.UpdatedAt).ToUnixTimeMilliseconds().ToString()
+                };
+                sb.AppendLine(string.Join(",", cols));
+            }
+            return sb.ToString();
+        }
+
+        /// <summary>
+        /// Backup images referenced by cards/documents to images/ folder
+        /// </summary>
+        private async Task BackupImagesAsync(string backupPath, List<SecureItem> cardDocItems)
+        {
+            // Collect all image filenames from items
+            var imageFileNames = new HashSet<string>();
+            
+            foreach (var item in cardDocItems)
+            {
+                try
+                {
+                    string data = _securityService.Decrypt(item.ItemData);
+                    using var doc = JsonDocument.Parse(data);
+                    
+                    JsonElement imgPathsElem;
+                    if (doc.RootElement.TryGetProperty("imagePaths", out imgPathsElem) ||
+                        doc.RootElement.TryGetProperty("ImagePaths", out imgPathsElem))
+                    {
+                        if (imgPathsElem.ValueKind == JsonValueKind.Array)
+                        {
+                            foreach (var pathElem in imgPathsElem.EnumerateArray())
+                            {
+                                string path = pathElem.GetString() ?? "";
+                                if (!string.IsNullOrEmpty(path))
+                                {
+                                    imageFileNames.Add(path);
+                                }
+                            }
+                        }
+                    }
+                }
+                catch { }
+            }
+            
+            if (imageFileNames.Count == 0) return;
+            
+            // Create images folder
+            string imagesDir = Path.Combine(backupPath, "images");
+            Directory.CreateDirectory(imagesDir);
+            
+            // Get image source paths (check both locations)
+            string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            string monicaAttachmentsPath = Path.Combine(localAppData, "MonicaAttachments");
+            string uwpAttachmentsPath = "";
+            
+            try
+            {
+                var localFolder = global::Windows.Storage.ApplicationData.Current.LocalFolder;
+                uwpAttachmentsPath = Path.Combine(localFolder.Path, "Attachments");
+            }
+            catch { }
+            
+            int copied = 0;
+            foreach (var fileName in imageFileNames)
+            {
+                try
+                {
+                    string? sourcePath = null;
+                    
+                    // Check MonicaAttachments first
+                    string monicaPath = Path.Combine(monicaAttachmentsPath, fileName);
+                    if (File.Exists(monicaPath))
+                    {
+                        sourcePath = monicaPath;
+                    }
+                    else if (!string.IsNullOrEmpty(uwpAttachmentsPath))
+                    {
+                        string uwpPath = Path.Combine(uwpAttachmentsPath, fileName);
+                        if (File.Exists(uwpPath))
+                        {
+                            sourcePath = uwpPath;
+                        }
+                    }
+                    
+                    if (sourcePath != null)
+                    {
+                        // Read Windows-encrypted file, decrypt, then re-encrypt with Android format
+                        string encryptedContent = await File.ReadAllTextAsync(sourcePath);
+                        string base64 = _securityService.Decrypt(encryptedContent);
+                        byte[] imageBytes = Convert.FromBase64String(base64);
+                        
+                        // Encrypt with Android format (AES-CBC)
+                        byte[] androidEncrypted = EncryptForAndroid(imageBytes);
+                        
+                        string destPath = Path.Combine(imagesDir, fileName);
+                        await File.WriteAllBytesAsync(destPath, androidEncrypted);
+                        copied++;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Failed to backup image {fileName}: {ex.Message}");
+                }
+            }
+            
+            System.Diagnostics.Debug.WriteLine($"Backed up {copied}/{imageFileNames.Count} images");
+        }
+
+        /// <summary>
+        /// Encrypt image bytes using Android format (AES/CBC/PKCS7 with fixed key/IV)
+        /// </summary>
+        private byte[] EncryptForAndroid(byte[] imageBytes)
+        {
+            byte[] key = System.Text.Encoding.UTF8.GetBytes("MonicaSecureKey1");
+            byte[] iv = System.Text.Encoding.UTF8.GetBytes("MonicaSecureIV16");
+            
+            using var aes = System.Security.Cryptography.Aes.Create();
+            aes.Key = key;
+            aes.IV = iv;
+            aes.Mode = System.Security.Cryptography.CipherMode.CBC;
+            aes.Padding = System.Security.Cryptography.PaddingMode.PKCS7;
+            
+            using var encryptor = aes.CreateEncryptor();
+            return encryptor.TransformFinalBlock(imageBytes, 0, imageBytes.Length);
         }
 
         private string EscapeCsv(string field)

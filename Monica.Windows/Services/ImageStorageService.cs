@@ -11,7 +11,7 @@ namespace Monica.Windows.Services
     public interface IImageStorageService
     {
         Task<string> SaveImageAsync(global::Windows.Storage.StorageFile file);
-        Task<string> SaveImageFromPathAsync(string sourcePath);
+        Task<(string FileName, bool IsNew)> SaveImageFromPathAsync(string sourcePath);
         Task<BitmapImage?> LoadImageAsync(string fileName);
         Task DeleteImageAsync(string fileName);
         
@@ -230,13 +230,33 @@ namespace Monica.Windows.Services
         /// Handles Android-encrypted images (AES-CBC with fixed key)
         /// IMPORTANT: This preserves the original filename so CSV imagePaths references work
         /// Uses standard .NET I/O ONLY to avoid Windows.Storage threading issues
+        /// Returns (FileName, IsNew) - IsNew is false if image already existed and import was skipped
         /// </summary>
-        public async Task<string> SaveImageFromPathAsync(string sourcePath)
+        public async Task<(string FileName, bool IsNew)> SaveImageFromPathAsync(string sourcePath)
         {
             try
             {
                 // Get original filename - MUST preserve this as CSV references it
                 string originalFileName = Path.GetFileName(sourcePath);
+                
+                // Determine destination path first to check existence
+                string fileName = originalFileName;
+                if (!fileName.EndsWith(".enc", StringComparison.OrdinalIgnoreCase))
+                {
+                    fileName = Path.GetFileNameWithoutExtension(fileName) + ".enc";
+                }
+
+                string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+                string attachmentsPath = Path.Combine(localAppData, "MonicaAttachments");
+                string destPath = Path.Combine(attachmentsPath, fileName);
+                
+                // Optimization: Skip if already exists
+                if (File.Exists(destPath))
+                {
+                    System.Diagnostics.Debug.WriteLine($"Image {fileName} already exists. Skipping import.");
+                    return (fileName, false);
+                }
+
                 System.Diagnostics.Debug.WriteLine($"SaveImageFromPathAsync: importing {originalFileName}");
                 
                 // 1. Read encrypted file bytes from Android backup
@@ -254,34 +274,19 @@ namespace Monica.Windows.Services
                 string encrypted = _securityService.Encrypt(base64);
                 System.Diagnostics.Debug.WriteLine($"Re-encrypted, length: {encrypted.Length}");
 
-                // 5. KEEP original filename (so CSV imagePaths matches)
-                string fileName = originalFileName;
-                
-                // Ensure it ends with .enc
-                if (!fileName.EndsWith(".enc", StringComparison.OrdinalIgnoreCase))
-                {
-                    fileName = Path.GetFileNameWithoutExtension(fileName) + ".enc";
-                }
-
-                // 6. Use ONLY standard .NET APIs - NO WinRT calls at all!
-                // Use MonicaAttachments subfolder in LocalAppData to avoid any UWP path issues
-                string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-                string attachmentsPath = Path.Combine(localAppData, "MonicaAttachments");
-                
-                // Ensure directory exists
+                // 5. Ensure directory exists (using path defined at start)
                 if (!Directory.Exists(attachmentsPath))
                 {
                     Directory.CreateDirectory(attachmentsPath);
                     System.Diagnostics.Debug.WriteLine($"Created MonicaAttachments folder at: {attachmentsPath}");
                 }
                 
-                // 7. Save to file with ORIGINAL name using standard .NET I/O
-                string destPath = Path.Combine(attachmentsPath, fileName);
+                // 6. Save to file (using path defined at start)
                 await File.WriteAllTextAsync(destPath, encrypted);
                 
                 System.Diagnostics.Debug.WriteLine($"Saved image to: {destPath}");
 
-                return fileName;
+                return (fileName, true);
             }
             catch (Exception ex)
             {

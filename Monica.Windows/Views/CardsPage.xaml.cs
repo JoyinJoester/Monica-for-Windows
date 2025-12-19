@@ -30,7 +30,7 @@ namespace Monica.Windows.Views
             _imageStorageService = _scope.ServiceProvider.GetRequiredService<IImageStorageService>();
             
             // Load both Document and BankCard types
-            ViewModel.Initialize(ItemType.Document);
+            ViewModel.Initialize(ItemType.BankCard, ItemType.Document);
             this.Loaded += CardsPage_Loaded;
             this.Unloaded += CardsPage_Unloaded;
         }

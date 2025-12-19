@@ -21,6 +21,7 @@ namespace Monica.Windows.ViewModels
         private bool _isLoading;
 
         private ItemType _currentItemType;
+        private ItemType[] _itemTypes = Array.Empty<ItemType>(); // Support multiple types
 
         public SecureItemsViewModel(AppDbContext context)
         {
@@ -30,6 +31,14 @@ namespace Monica.Windows.ViewModels
         public void Initialize(ItemType type)
         {
             _currentItemType = type;
+            _itemTypes = new[] { type };
+        }
+        
+        // Initialize with multiple types (for CardsPage which shows both BankCard and Document)
+        public void Initialize(params ItemType[] types)
+        {
+            _itemTypes = types;
+            _currentItemType = types.Length > 0 ? types[0] : ItemType.Note;
         }
 
         public async Task LoadDataAsync()
@@ -38,7 +47,7 @@ namespace Monica.Windows.ViewModels
             try
             {
                 var items = await _context.SecureItems
-                    .Where(x => x.ItemType == _currentItemType)
+                    .Where(x => _itemTypes.Contains(x.ItemType))
                     .OrderByDescending(x => x.UpdatedAt)
                     .ToListAsync();
 

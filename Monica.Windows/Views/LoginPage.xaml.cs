@@ -96,8 +96,6 @@ namespace Monica.Windows.Views
         {
             var password = SetupPasswordInput.Password;
             var confirmPassword = SetupConfirmPasswordInput.Password;
-            var question = SecurityQuestionInput.Text;
-            var answer = SecurityAnswerInput.Password;
 
             if (string.IsNullOrEmpty(password))
             {
@@ -118,12 +116,6 @@ namespace Monica.Windows.Views
             }
 
             _securityService.SetMasterPassword(password);
-            
-            // Save security question if provided
-            if (!string.IsNullOrWhiteSpace(question) && !string.IsNullOrWhiteSpace(answer))
-            {
-                _securityService.SetSecurityQuestion(question, answer);
-            }
 
             _securityService.Unlock(password);
 

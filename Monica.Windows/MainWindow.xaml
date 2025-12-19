@@ -40,12 +40,25 @@
                     <NavigationViewItem Icon="ContactInfo" Content="卡包" Tag="Cards" />
                     <NavigationViewItem Icon="OutlineStar" Content="密码收藏" Tag="Favorites" />
                     <NavigationViewItemSeparator />
+                    <!-- Dynamic categories will be added here in code-behind -->
                     <!-- Category Management Header with Add Button -->
                     <NavigationViewItem x:Name="CategoriesHeader" SelectsOnInvoked="False" 
                                         Icon="Add" Content="新建分类" Tag="AddCategory" 
                                         Tapped="CategoriesHeader_Tapped"/>
-                    <!-- Dynamic categories will be added here in code-behind -->
                 </NavigationView.MenuItems>
+
+                <NavigationView.FooterMenuItems>
+                    <NavigationViewItem Content="快捷备份" Tag="QuickBackup" SelectsOnInvoked="False" Tapped="QuickBackup_Tapped">
+                        <NavigationViewItem.Icon>
+                            <FontIcon Glyph="&#xE898;"/>
+                        </NavigationViewItem.Icon>
+                    </NavigationViewItem>
+                    <NavigationViewItem Content="备份与同步" Tag="WebDAV">
+                        <NavigationViewItem.Icon>
+                            <FontIcon Glyph="&#xE753;"/>
+                        </NavigationViewItem.Icon>
+                    </NavigationViewItem>
+                </NavigationView.FooterMenuItems>
                 <Frame x:Name="ContentFrame" />
             </NavigationView>
         </Grid>

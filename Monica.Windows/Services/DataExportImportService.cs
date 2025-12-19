@@ -214,6 +214,53 @@ namespace Monica.Windows.Services
                     };
 
                     string decryptedData = _securityService.Decrypt(item.ItemData);
+                    string imagePaths = "";
+                    
+                    // For cards and documents, extract imagePaths from JSON and remove it
+                    // Android expects imagePaths as a separate field, not embedded in itemData
+                    if (item.ItemType == ItemType.BankCard || item.ItemType == ItemType.Document)
+                    {
+                        try
+                        {
+                            using var doc = JsonDocument.Parse(decryptedData);
+                            var root = doc.RootElement;
+                            
+                            // Extract imagePaths
+                            if (root.TryGetProperty("imagePaths", out var imgPathsElem))
+                            {
+                                imagePaths = imgPathsElem.ToString();
+                            }
+                            else if (root.TryGetProperty("ImagePaths", out var imgPathsElem2))
+                            {
+                                imagePaths = imgPathsElem2.ToString();
+                            }
+                            
+                            // Rebuild JSON without imagePaths for Android compatibility
+                            var cleanedData = new Dictionary<string, object?>();
+                            foreach (var prop in root.EnumerateObject())
+                            {
+                                string propName = prop.Name;
+                                if (propName.Equals("imagePaths", StringComparison.OrdinalIgnoreCase) ||
+                                    propName.Equals("ImagePaths", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    continue;
+                                }
+                                
+                                cleanedData[propName] = prop.Value.ValueKind switch
+                                {
+                                    JsonValueKind.String => prop.Value.GetString(),
+                                    JsonValueKind.Number => prop.Value.TryGetInt64(out var l) ? l : prop.Value.GetDouble(),
+                                    JsonValueKind.True => true,
+                                    JsonValueKind.False => false,
+                                    JsonValueKind.Null => null,
+                                    _ => prop.Value.ToString()
+                                };
+                            }
+                            
+                            decryptedData = JsonSerializer.Serialize(cleanedData);
+                        }
+                        catch { }
+                    }
 
                     var row = new string[]
                     {
@@ -223,7 +270,7 @@ namespace Monica.Windows.Services
                         EscapeCsvField(decryptedData),
                         EscapeCsvField(item.Notes),
                         item.IsFavorite.ToString(),
-                        "",
+                        EscapeCsvField(imagePaths),
                         new DateTimeOffset(item.CreatedAt).ToUnixTimeMilliseconds().ToString(),
                         new DateTimeOffset(item.UpdatedAt).ToUnixTimeMilliseconds().ToString()
                     };

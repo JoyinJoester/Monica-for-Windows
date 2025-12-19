@@ -66,6 +66,12 @@ namespace Monica.Windows.ViewModels
             var radioPasswords = new RadioButton { Content = "仅清空密码", GroupName = "ClearOption" };
             var radioSecure = new RadioButton { Content = "仅清空安全项目 (2FA、笔记、卡片)", GroupName = "ClearOption" };
             
+            var confirmTextBox = new TextBox 
+            { 
+                Header = "请输入 \"我确认清空全部数据\" 以确认",
+                PlaceholderText = "我确认清空全部数据"
+            };
+            
             stack.Children.Add(new TextBlock { Text = "选择要清空的数据类型:", TextWrapping = TextWrapping.Wrap });
             stack.Children.Add(radioAll);
             stack.Children.Add(radioPasswords);
@@ -77,6 +83,7 @@ namespace Monica.Windows.ViewModels
                 FontSize = 12,
                 TextWrapping = TextWrapping.Wrap
             });
+            stack.Children.Add(confirmTextBox);
 
             var dialog = new ContentDialog
             {
@@ -91,6 +98,13 @@ namespace Monica.Windows.ViewModels
             var result = await dialog.ShowAsync();
             if (result == ContentDialogResult.Primary)
             {
+                // Validate confirmation text
+                if (confirmTextBox.Text != "我确认清空全部数据")
+                {
+                    await ShowMessageAsync("验证失败", "请输入正确的确认文字");
+                    return;
+                }
+                
                 try
                 {
                     var dbContext = ((App)App.Current).Services.GetRequiredService<AppDbContext>();

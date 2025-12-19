@@ -62,20 +62,6 @@
                                  PlaceholderText="再次输入密码" 
                                  Header="确认密码"/>
 
-                    <Rectangle Height="1" Fill="{ThemeResource DividerStrokeColorDefaultBrush}" Margin="0,8"/>
-                    
-                    <TextBlock Text="安全问题 (可选)" Style="{ThemeResource BodyStrongTextBlockStyle}"/>
-                    <TextBlock Text="用于找回密码" Style="{ThemeResource CaptionTextBlockStyle}" 
-                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
-
-                    <TextBox x:Name="SecurityQuestionInput" 
-                             PlaceholderText="例如：我的第一只宠物叫什么？" 
-                             Header="问题"/>
-                    
-                    <PasswordBox x:Name="SecurityAnswerInput" 
-                                 PlaceholderText="问题的答案" 
-                                 Header="答案"/>
-
                     <Button x:Name="SetupButton" 
                             Content="开始使用" 
                             Style="{ThemeResource AccentButtonStyle}"

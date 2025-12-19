@@ -37,7 +37,7 @@ namespace Monica.Windows
             services.AddTransient<MainViewModel>();
             services.AddTransient<PasswordListViewModel>();
             services.AddSingleton<DataExportImportService>();
-            services.AddSingleton<WebDavService>();
+            services.AddSingleton<IWebDavService, WebDavService>();
             services.AddTransient<SettingsViewModel>();
             services.AddTransient<SecureItemsViewModel>();
 

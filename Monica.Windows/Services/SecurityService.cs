@@ -230,6 +230,13 @@ namespace Monica.Windows.Services
                 var dbPath = Path.Combine(folder, "Monica", "monica.db");
                 if (File.Exists(dbPath)) File.Delete(dbPath);
 
+                // Delete MonicaAttachments folder (image storage)
+                var attachmentsPath = Path.Combine(folder, "MonicaAttachments");
+                if (Directory.Exists(attachmentsPath))
+                {
+                    Directory.Delete(attachmentsPath, true);
+                }
+
                 // Lock vault
                 _masterKey = null;
             }

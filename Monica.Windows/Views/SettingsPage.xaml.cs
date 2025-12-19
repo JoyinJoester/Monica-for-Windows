@@ -677,9 +677,11 @@ namespace Monica.Windows.Views
             }
         }
 
-        private async void WebDAV_Click(object sender, RoutedEventArgs e)
+        private void WebDAV_Click(object sender, RoutedEventArgs e)
         {
-            var webDavService = ((App)App.Current).Services.GetRequiredService<WebDavService>();
+            this.Frame.Navigate(typeof(WebDavPage));
+            #if false
+            var webDavService = ((App)App.Current).Services.GetRequiredService<IWebDavService>();
             // Unpackaged apps cannot use ApplicationData.Current. Using LocalSettingsHelper.
             // var localSettings = global::Windows.Storage.ApplicationData.Current.LocalSettings;
 
@@ -958,6 +960,7 @@ namespace Monica.Windows.Views
             };
 
             await dialog.ShowAsync();
+            #endif
         }
 
         private void Language_Changed(object sender, SelectionChangedEventArgs e)

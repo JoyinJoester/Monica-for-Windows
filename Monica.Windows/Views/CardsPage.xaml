@@ -34,6 +34,39 @@
                 </StackPanel>
             </Button>
         </Grid>
+
+        <!-- Multi-Select Toolbar (Floating Bottom Bar) -->
+        <Border x:Name="MultiSelectToolbar" Grid.Row="1" Visibility="Collapsed"
+                Canvas.ZIndex="100"
+                Background="{ThemeResource AcrylicBackgroundFillColorDefaultBrush}"
+                CornerRadius="12" Padding="16,12" 
+                VerticalAlignment="Bottom" HorizontalAlignment="Center"
+                Margin="0,0,0,24"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1">
+            <StackPanel Orientation="Horizontal" Spacing="16">
+                <!-- Selection Count -->
+                <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                    <FontIcon Glyph="&#xE762;" FontSize="16" Foreground="{ThemeResource AccentFillColorDefaultBrush}"/>
+                    <TextBlock x:Name="SelectedCountText" Text="已选 0 项" VerticalAlignment="Center" FontWeight="SemiBold"/>
+                </StackPanel>
+                
+                <Border Width="1" Height="24" Background="{ThemeResource DividerStrokeColorDefaultBrush}"/>
+                
+                <!-- Actions -->
+                <StackPanel Orientation="Horizontal" Spacing="4">
+                    <Button x:Name="BatchDeleteBtn" ToolTipService.ToolTip="批量删除" Click="BatchDelete_Click"
+                            Background="Transparent" BorderThickness="0" Padding="10">
+                        <FontIcon Glyph="&#xE74D;" FontSize="18" Foreground="{ThemeResource SystemFillColorCriticalBrush}"/>
+                    </Button>
+                </StackPanel>
+                
+                <Border Width="1" Height="24" Background="{ThemeResource DividerStrokeColorDefaultBrush}"/>
+                
+                <!-- Cancel -->
+                <Button Content="取消" Click="CancelMultiSelect_Click" 
+                        Background="Transparent" BorderThickness="0"/>
+            </StackPanel>
+        </Border>
         
         <!-- Card List -->
         <ListView x:Name="CardsListView" Grid.Row="1" 
@@ -50,9 +83,19 @@
             </ListView.ItemContainerStyle>
             <ListView.ItemTemplate>
                 <DataTemplate x:DataType="models:SecureItem">
-                    <Grid Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" 
+                    <Grid x:Name="CardGrid"
+                          Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" 
                           CornerRadius="8" Padding="16"
-                          BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1">
+                          BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="2"
+                          PointerPressed="CardGrid_PointerPressed">
+                        <Grid.ContextFlyout>
+                            <MenuFlyout>
+                                <MenuFlyoutItem Text="多选" Click="MultiSelect_Click" Icon="List" Tag="{x:Bind}"/>
+                                <MenuFlyoutSeparator/>
+                                <MenuFlyoutItem Text="编辑" Click="EditButton_Click" Icon="Edit" Tag="{x:Bind}"/>
+                                <MenuFlyoutItem Text="删除" Click="DeleteButton_Click" Icon="Delete" Tag="{x:Bind}" Foreground="{ThemeResource SystemFillColorCriticalBrush}"/>
+                            </MenuFlyout>
+                        </Grid.ContextFlyout>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="*"/>

@@ -9,6 +9,8 @@ using System.Text.Json;
 using System.Collections.Generic;
 using Microsoft.UI.Xaml.Media.Imaging;
 using System.IO;
+using System.Threading.Tasks;
+using System.Linq;
 
 namespace Monica.Windows.Views
 {
@@ -85,19 +87,34 @@ namespace Monica.Windows.Views
 
             if (selectedType == "document")
             {
-                await ShowAddDocumentDialog();
+                await ShowDocumentDialog();
             }
             else if (selectedType == "bankcard")
             {
-                await ShowAddBankCardDialog();
+                await ShowBankCardDialog();
+            }
+        }
+        private async void EditButton_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is FrameworkElement btn && btn.Tag is SecureItem item)
+            {
+                if (item.ItemType == ItemType.Document)
+                {
+                    await ShowDocumentDialog(item);
+                }
+                else if (item.ItemType == ItemType.BankCard)
+                {
+                    await ShowBankCardDialog(item);
+                }
             }
         }
 
-        private async System.Threading.Tasks.Task ShowAddDocumentDialog()
+        private async Task ShowDocumentDialog(SecureItem? existingItem = null)
         {
+            var isEdit = existingItem != null;
             var dialog = new ContentDialog
             {
-                Title = "添加证件",
+                Title = isEdit ? "编辑证件" : "添加证件",
                 PrimaryButtonText = "保存",
                 CloseButtonText = "取消",
                 DefaultButton = ContentDialogButton.Primary,
@@ -173,6 +190,58 @@ namespace Monica.Windows.Views
             
             global::Windows.Storage.StorageFile? frontFile = null;
             global::Windows.Storage.StorageFile? backFile = null;
+            DocumentData? existingData = null;
+
+            // Pre-fill if editing
+            if (isEdit) 
+            {
+                 try {
+                    var json = _securityService.Decrypt(existingItem!.ItemData);
+                    existingData = JsonSerializer.Deserialize<DocumentData>(json);
+                 } catch {}
+            }
+            
+            if (existingData != null)
+            {
+                 foreach(ComboBoxItem item in typeCombo.Items) {
+                    if (item.Tag?.ToString() == existingData.DocumentTypeString) {
+                        typeCombo.SelectedItem = item;
+                        break;
+                    }
+                 }
+                 titleBox.Text = existingItem.Title;
+                 numberBox.Text = existingData.DocumentNumber;
+                 nameBox.Text = existingData.FullName ?? "";
+                 issuedDateBox.Text = existingData.IssuedDate ?? "";
+                 expiryDateBox.Text = existingData.ExpiryDate ?? "";
+                 issuedByBox.Text = existingData.IssuedBy ?? "";
+                 notesBox.Text = existingItem.Notes ?? "";
+
+                 // Load existing images if available
+                 if (existingData.ImagePaths != null) 
+                 {
+                    if (existingData.ImagePaths.Count > 0 && !string.IsNullOrEmpty(existingData.ImagePaths[0])) 
+                    {
+                       try {
+                           var bitmap = await _imageStorageService.LoadImageAsync(existingData.ImagePaths[0]);
+                           if (bitmap != null) {
+                               frontImage.Source = bitmap;
+                               frontImageBorder.Child = frontImage;
+                           }
+                       } catch {}
+                    }
+                    if (existingData.ImagePaths.Count > 1 && !string.IsNullOrEmpty(existingData.ImagePaths[1])) 
+                    {
+                       try {
+                           var bitmap = await _imageStorageService.LoadImageAsync(existingData.ImagePaths[1]);
+                           if (bitmap != null) {
+                               backImage.Source = bitmap;
+                               backImageBorder.Child = backImage;
+                           }
+                       } catch {}
+                    }
+                 }
+            }
             
             // Update back panel visibility based on document type
             typeCombo.SelectionChanged += (s, e) =>
@@ -181,6 +250,11 @@ namespace Monica.Windows.Views
                 // Passport only needs 1 image (front only)
                 backPanel.Visibility = (selected == "PASSPORT") ? Visibility.Collapsed : Visibility.Visible;
             };
+            // Trigger selection changed manual update if edit
+            if (existingData != null) {
+                var selected = (typeCombo.SelectedItem as ComboBoxItem)?.Tag?.ToString();
+                 backPanel.Visibility = (selected == "PASSPORT") ? Visibility.Collapsed : Visibility.Visible;
+            }
             
             frontImageBorder.Tapped += async (s, e) =>
             {
@@ -256,15 +330,30 @@ namespace Monica.Windows.Views
                 
                 // Save images (front and optionally back)
                 var savedImagePaths = new List<string>();
+                
+                // Front Image Logic
                 if (frontFile != null)
                 {
                     var path = await _imageStorageService.SaveImageAsync(frontFile);
                     savedImagePaths.Add(path);
                 }
-                if (backFile != null && selectedType != "PASSPORT")
+                else if (isEdit && existingData?.ImagePaths?.Count > 0)
                 {
-                    var path = await _imageStorageService.SaveImageAsync(backFile);
-                    savedImagePaths.Add(path);
+                    savedImagePaths.Add(existingData.ImagePaths[0]);
+                }
+
+                // Back Image Logic
+                if (selectedType != "PASSPORT")
+                {
+                    if (backFile != null)
+                    {
+                        var path = await _imageStorageService.SaveImageAsync(backFile);
+                        savedImagePaths.Add(path);
+                    }
+                    else if (isEdit && existingData?.ImagePaths?.Count > 1) 
+                    {
+                        savedImagePaths.Add(existingData.ImagePaths[1]);
+                    }
                 }
 
                 var docData = new DocumentData
@@ -294,23 +383,34 @@ namespace Monica.Windows.Views
                     };
                 }
 
-                var item = new SecureItem
+                if (isEdit)
                 {
-                    Title = title,
-                    Notes = notesBox.Text.Trim(),
-                    ItemData = encryptedData,
-                    ItemType = ItemType.Document
-                };
-
-                await ViewModel.AddItemAsync(item);
+                    existingItem!.Title = title;
+                    existingItem.Notes = notesBox.Text.Trim();
+                    existingItem.ItemData = encryptedData;
+                    existingItem.UpdatedAt = DateTime.Now;
+                    await ViewModel.UpdateItemAsync(existingItem);
+                }
+                else
+                {
+                    var item = new SecureItem
+                    {
+                        Title = title,
+                        Notes = notesBox.Text.Trim(),
+                        ItemData = encryptedData,
+                        ItemType = ItemType.Document
+                    };
+                    await ViewModel.AddItemAsync(item);
+                }
             }
         }
 
-        private async System.Threading.Tasks.Task ShowAddBankCardDialog()
+        private async Task ShowBankCardDialog(SecureItem? existingItem = null)
         {
+            var isEdit = existingItem != null;
             var dialog = new ContentDialog
             {
-                Title = "添加银行卡",
+                Title = isEdit ? "编辑银行卡" : "添加银行卡",
                 PrimaryButtonText = "保存",
                 CloseButtonText = "取消",
                 DefaultButton = ContentDialogButton.Primary,
@@ -407,6 +507,61 @@ namespace Monica.Windows.Views
             
             global::Windows.Storage.StorageFile? bcFrontFile = null;
             global::Windows.Storage.StorageFile? bcBackFile = null;
+            BankCardData? existingData = null;
+
+            // Pre-fill if editing
+            if (isEdit) 
+            {
+                 try {
+                    var json = _securityService.Decrypt(existingItem!.ItemData);
+                    existingData = JsonSerializer.Deserialize<BankCardData>(json);
+                 } catch {}
+            }
+
+            if (existingData != null)
+            {
+                 foreach(ComboBoxItem item in cardTypeCombo.Items) {
+                    if (item.Tag?.ToString() == existingData.CardTypeString) {
+                        cardTypeCombo.SelectedItem = item;
+                        break;
+                    }
+                 }
+                 titleBox.Text = existingItem.Title;
+                 bankNameBox.Text = existingData.BankName ?? "";
+                 cardNumberBox.Text = existingData.CardNumber ?? "";
+                 holderNameBox.Text = existingData.CardholderName ?? "";
+                 
+                 if (int.TryParse(existingData.ExpiryMonth, out int m)) expiryMonthBox.Value = m;
+                 if (int.TryParse(existingData.ExpiryYear, out int y)) expiryYearBox.Value = y;
+                 
+                 cvvBox.Password = existingData.Cvv ?? "";
+                 notesBox.Text = existingItem.Notes ?? "";
+
+                 // Load existing images if available
+                 if (existingData.ImagePaths != null) 
+                 {
+                    if (existingData.ImagePaths.Count > 0 && !string.IsNullOrEmpty(existingData.ImagePaths[0])) 
+                    {
+                       try {
+                           var bitmap = await _imageStorageService.LoadImageAsync(existingData.ImagePaths[0]);
+                           if (bitmap != null) {
+                               bcFrontImage.Source = bitmap;
+                               bcFrontImageBorder.Child = bcFrontImage;
+                           }
+                       } catch {}
+                    }
+                    if (existingData.ImagePaths.Count > 1 && !string.IsNullOrEmpty(existingData.ImagePaths[1])) 
+                    {
+                       try {
+                           var bitmap = await _imageStorageService.LoadImageAsync(existingData.ImagePaths[1]);
+                           if (bitmap != null) {
+                               bcBackImage.Source = bitmap;
+                               bcBackImageBorder.Child = bcBackImage;
+                           }
+                       } catch {}
+                    }
+                 }
+            }
             
             bcFrontImageBorder.Tapped += async (s, ev) =>
             {
@@ -487,10 +642,19 @@ namespace Monica.Windows.Views
                     var path = await _imageStorageService.SaveImageAsync(bcFrontFile);
                     savedImagePaths.Add(path);
                 }
+                else if (isEdit && existingData?.ImagePaths?.Count > 0)
+                {
+                    savedImagePaths.Add(existingData.ImagePaths[0]);
+                }
+
                 if (bcBackFile != null)
                 {
                     var path = await _imageStorageService.SaveImageAsync(bcBackFile);
                     savedImagePaths.Add(path);
+                }
+                else if (isEdit && existingData?.ImagePaths?.Count > 1) 
+                {
+                    savedImagePaths.Add(existingData.ImagePaths[1]);
                 }
                 
                 var cardData = new BankCardData
@@ -515,21 +679,31 @@ namespace Monica.Windows.Views
                     if (string.IsNullOrEmpty(title)) title = "银行卡";
                 }
 
-                var item = new SecureItem
+                if (isEdit)
                 {
-                    Title = title,
-                    Notes = notesBox.Text.Trim(),
-                    ItemData = encryptedData,
-                    ItemType = ItemType.BankCard
-                };
-
-                await ViewModel.AddItemAsync(item);
+                    existingItem!.Title = title;
+                    existingItem.Notes = notesBox.Text.Trim();
+                    existingItem.ItemData = encryptedData;
+                    existingItem.UpdatedAt = DateTime.Now;
+                    await ViewModel.UpdateItemAsync(existingItem);
+                }
+                else
+                {
+                    var item = new SecureItem
+                    {
+                        Title = title,
+                        Notes = notesBox.Text.Trim(),
+                        ItemData = encryptedData,
+                        ItemType = ItemType.BankCard
+                    };
+                    await ViewModel.AddItemAsync(item);
+                }
             }
         }
 
         private async void DeleteButton_Click(object sender, RoutedEventArgs e)
         {
-            if (sender is Button btn && btn.Tag is SecureItem item)
+            if (sender is FrameworkElement btn && btn.Tag is SecureItem item)
             {
                 var dialog = new ContentDialog
                 {
@@ -545,8 +719,138 @@ namespace Monica.Windows.Views
                 }
             }
         }
+
+        // Custom multi-select state
+        private bool _isMultiSelectMode = false;
+        private readonly HashSet<SecureItem> _selectedItems = new();
+        private readonly Dictionary<SecureItem, Grid> _cardGrids = new();
+
+        private void UpdateSelectedCount()
+        {
+            SelectedCountText.Text = $"已选 {_selectedItems.Count} 项";
+        }
+
+        private Grid? FindChildGrid(DependencyObject parent)
+        {
+            for (int i = 0; i < Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChildrenCount(parent); i++)
+            {
+                var child = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChild(parent, i);
+                if (child is Grid grid && grid.Name == "CardGrid")
+                {
+                    return grid;
+                }
+                var result = FindChildGrid(child);
+                if (result != null) return result;
+            }
+            return null;
+        }
+
+        private void CardsListView_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (CardsListView.SelectionMode == ListViewSelectionMode.Multiple)
+            {
+                SelectedCountText.Text = $"已选 {CardsListView.SelectedItems.Count} 项";
+            }
+        }
+
+        private void MultiSelect_Click(object sender, RoutedEventArgs e)
+        {
+            _isMultiSelectMode = true;
+            CardsListView.SelectionMode = ListViewSelectionMode.None;
+            CardsListView.IsItemClickEnabled = true;
+            MultiSelectToolbar.Visibility = Visibility.Visible;
+            _selectedItems.Clear();
+            _cardGrids.Clear();
+            
+            if (sender is MenuFlyoutItem item && item.Tag is SecureItem secureItem)
+            {
+                _selectedItems.Add(secureItem);
+                
+                var container = CardsListView.ContainerFromItem(secureItem) as ListViewItem;
+                if (container != null)
+                {
+                    var grid = FindChildGrid(container);
+                    if (grid != null)
+                    {
+                        grid.BorderBrush = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AccentFillColorDefaultBrush"];
+                        _cardGrids[secureItem] = grid;
+                    }
+                }
+                UpdateSelectedCount();
+            }
+        }
+
+        private void CancelMultiSelect_Click(object sender, RoutedEventArgs e)
+        {
+            _isMultiSelectMode = false;
+            MultiSelectToolbar.Visibility = Visibility.Collapsed;
+            
+            // Reset visuals
+            foreach(var kvp in _cardGrids)
+            {
+                kvp.Value.BorderBrush = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["CardStrokeColorDefaultBrush"];
+            }
+            _selectedItems.Clear();
+            _cardGrids.Clear();
+        }
+
+        private void CardGrid_PointerPressed(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+        {
+            if (!_isMultiSelectMode) return;
+            
+            var props = e.GetCurrentPoint(null).Properties;
+            if (!props.IsLeftButtonPressed) return;
+
+            if (sender is Grid grid && grid.DataContext is SecureItem item)
+            {
+                if (_selectedItems.Contains(item))
+                {
+                    _selectedItems.Remove(item);
+                    grid.BorderBrush = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["CardStrokeColorDefaultBrush"];
+                    _cardGrids.Remove(item);
+                }
+                else
+                {
+                    _selectedItems.Add(item);
+                    grid.BorderBrush = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AccentFillColorDefaultBrush"];
+                    _cardGrids[item] = grid;
+                }
+                UpdateSelectedCount();
+                e.Handled = true; // Prevent ItemClick
+            }
+        }
+
+        private async void BatchDelete_Click(object sender, RoutedEventArgs e)
+        {
+            var items = _selectedItems.ToList(); // Use manual selection
+            if (items.Count == 0) return;
+
+            var dialog = new ContentDialog
+            {
+                Title = "批量删除",
+                Content = $"确定要删除选中的 {items.Count} 个项目吗？",
+                PrimaryButtonText = "删除",
+                CloseButtonText = "取消",
+                DefaultButton = ContentDialogButton.Close,
+                XamlRoot = this.XamlRoot
+            };
+
+            if (await dialog.ShowAsync() == ContentDialogResult.Primary)
+            {
+                foreach (var item in items)
+                {
+                    await ViewModel.DeleteItemAsync(item);
+                }
+                CancelMultiSelect_Click(null, null);
+            }
+        }
+        
+
+
         private void CardsListView_ItemClick(object sender, ItemClickEventArgs e)
         {
+            if (_isMultiSelectMode) return; // Ignore click in multi-select mode
+            
             if (e.ClickedItem is SecureItem item)
             {
                 // Navigate to CardDetailPage instead of showing a dialog

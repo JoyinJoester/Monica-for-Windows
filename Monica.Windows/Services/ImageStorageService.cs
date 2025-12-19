@@ -250,11 +250,22 @@ namespace Monica.Windows.Services
                 string attachmentsPath = Path.Combine(localAppData, "MonicaAttachments");
                 string destPath = Path.Combine(attachmentsPath, fileName);
                 
-                // Optimization: Skip if already exists
+                // Check if file already exists AND is readable with current key
                 if (File.Exists(destPath))
                 {
-                    System.Diagnostics.Debug.WriteLine($"Image {fileName} already exists. Skipping import.");
-                    return (fileName, false);
+                    // Try to verify the existing file can be decrypted
+                    bool canDecrypt = await VerifyExistingImageAsync(destPath);
+                    if (canDecrypt)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"Image {fileName} already exists and is valid. Skipping import.");
+                        return (fileName, false);
+                    }
+                    else
+                    {
+                        // Existing file is corrupt or encrypted with wrong key - reimport it
+                        System.Diagnostics.Debug.WriteLine($"Image {fileName} exists but cannot be decrypted. Reimporting...");
+                        File.Delete(destPath);
+                    }
                 }
 
                 System.Diagnostics.Debug.WriteLine($"SaveImageFromPathAsync: importing {originalFileName}");
@@ -325,6 +336,43 @@ namespace Monica.Windows.Services
                 System.Diagnostics.Debug.WriteLine($"Android image decryption failed: {ex.Message}");
                 // If decryption fails, assume it's a raw image and return as-is
                 return encryptedData;
+            }
+        }
+
+        /// <summary>
+        /// Verify that an existing image file can be decrypted with the current key
+        /// </summary>
+        private async Task<bool> VerifyExistingImageAsync(string filePath)
+        {
+            try
+            {
+                byte[] rawBytes = await File.ReadAllBytesAsync(filePath);
+                
+                // Check if it's Windows format (text) - try to decrypt
+                bool isTextFormat = rawBytes.Length > 0 && rawBytes.All(b => b >= 32 && b < 127 || b == '\r' || b == '\n');
+                
+                if (isTextFormat)
+                {
+                    // Windows format: text file with encrypted base64
+                    string encrypted = System.Text.Encoding.UTF8.GetString(rawBytes);
+                    string base64 = _securityService.Decrypt(encrypted);
+                    if (string.IsNullOrEmpty(base64)) return false;
+                    
+                    // Try to decode base64 to verify it's valid
+                    byte[] imageBytes = Convert.FromBase64String(base64);
+                    return imageBytes.Length > 0;
+                }
+                else
+                {
+                    // Android format - try to decrypt using fixed key
+                    byte[] imageBytes = DecryptAndroidImage(rawBytes);
+                    return imageBytes.Length > 0;
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"VerifyExistingImageAsync failed for {filePath}: {ex.Message}");
+                return false;
             }
         }
     }

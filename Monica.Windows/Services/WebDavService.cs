@@ -16,7 +16,35 @@ using System.Xml.Linq;
 
 namespace Monica.Windows.Services
 {
-    public class WebDavService
+    public class WebDavConfig
+    {
+        public string ServerUrl { get; set; } = "";
+        public string Username { get; set; } = "";
+        public string Password { get; set; } = "";
+    }
+
+    public class BackupOptions
+    {
+        public bool IncludePasswords { get; set; } = true;
+        public bool IncludeTotp { get; set; } = true;
+        public bool IncludeNotes { get; set; } = true;
+        public bool IncludeCards { get; set; } = true;
+        public bool IncludeImages { get; set; } = true;
+        public bool IncludeCategories { get; set; } = true;
+    }
+
+    public interface IWebDavService
+    {
+        WebDavConfig? GetCurrentConfig();
+        void SaveConfig(WebDavConfig config);
+        Task<bool> TestConnectionAsync();
+        Task<List<string>> ListBackupsAsync();
+        Task<string> CreateBackupAsync(bool encrypt = false, string? encryptPassword = null, BackupOptions? options = null);
+        Task<string> RestoreBackupAsync(string fileName, string? decryptPassword = null);
+        Task DeleteBackupAsync(string fileName);
+    }
+
+    public class WebDavService : IWebDavService
     {
         private readonly AppDbContext _dbContext;
         private readonly ISecurityService _securityService;
@@ -35,6 +63,58 @@ namespace Monica.Windows.Services
             _imageStorageService = imageStorageService;
             _client = new HttpClient();
             _client.DefaultRequestHeaders.UserAgent.ParseAdd("Monica-Windows/1.0");
+            
+            // Load saved config on startup
+            LoadSavedConfig();
+        }
+
+        private void LoadSavedConfig()
+        {
+            try
+            {
+                var configPath = GetConfigPath();
+                if (File.Exists(configPath))
+                {
+                    var json = File.ReadAllText(configPath);
+                    var config = JsonSerializer.Deserialize<WebDavConfig>(json);
+                    if (config != null && !string.IsNullOrEmpty(config.ServerUrl))
+                    {
+                        Configure(config.ServerUrl, config.Username, config.Password);
+                    }
+                }
+            }
+            catch { }
+        }
+
+        private string GetConfigPath()
+        {
+            var folder = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            var appFolder = Path.Combine(folder, "Monica");
+            Directory.CreateDirectory(appFolder);
+            return Path.Combine(appFolder, "webdav_config.json");
+        }
+
+        public WebDavConfig? GetCurrentConfig()
+        {
+            if (string.IsNullOrEmpty(_serverUrl)) return null;
+            return new WebDavConfig
+            {
+                ServerUrl = _serverUrl,
+                Username = _username,
+                Password = _password
+            };
+        }
+
+        public void SaveConfig(WebDavConfig config)
+        {
+            Configure(config.ServerUrl, config.Username, config.Password);
+            
+            try
+            {
+                var json = JsonSerializer.Serialize(config);
+                File.WriteAllText(GetConfigPath(), json);
+            }
+            catch { }
         }
 
         public void Configure(string url, string username, string password)
@@ -47,7 +127,7 @@ namespace Monica.Windows.Services
             _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", Convert.ToBase64String(authBytes));
         }
 
-        public async Task<(bool Success, string Message)> TestConnectionAsync()
+        public async Task<bool> TestConnectionAsync()
         {
             try
             {
@@ -57,34 +137,15 @@ namespace Monica.Windows.Services
                 
                 var response = await _client.SendAsync(request);
                 
-                if (response.IsSuccessStatusCode || (int)response.StatusCode == 207)
-                {
-                    return (true, "Success");
-                }
-                else if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized)
-                {
-                    return (false, "验证失败 (401 Unauthorized)。请检查用户名和密码。");
-                }
-                else if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
-                {
-                    return (false, "找不到路径 (404 Not Found)。请检查服务器地址是否正确。");
-                }
-                else
-                {
-                    return (false, $"服务器返回错误: {response.StatusCode} {(int)response.StatusCode}");
-                }
+                return response.IsSuccessStatusCode || (int)response.StatusCode == 207;
             }
-            catch (HttpRequestException ex)
+            catch
             {
-                return (false, $"网络请求失败: {ex.Message}");
-            }
-            catch (Exception ex)
-            {
-                return (false, $"发生未知错误: {ex.Message}");
+                return false;
             }
         }
 
-        public async Task<(List<string> Files, string? Error)> ListBackupsAsync()
+        public async Task<List<string>> ListBackupsAsync()
         {
             var results = new List<string>();
             try
@@ -100,12 +161,12 @@ namespace Monica.Windows.Services
                 // Check if folder doesn't exist (404)
                 if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
                 {
-                    return (results, "备份目录不存在 (404)。您可能还没有备份过任何数据。");
+                    return results; // Return empty list if folder not found
                 }
 
                 if (!response.IsSuccessStatusCode && (int)response.StatusCode != 207)
                 {
-                    return (results, $"服务器返回错误: {response.StatusCode} ({(int)response.StatusCode})");
+                    return results;
                 }
 
                 string xmlContent = await response.Content.ReadAsStringAsync();
@@ -136,30 +197,27 @@ namespace Monica.Windows.Services
                     }
                 }
                 
-                if (results.Count == 0)
-                {
-                    return (results, null); // Empty but not an error
-                }
-                
-                return (results.OrderByDescending(x => x).ToList(), null);
+                return results.OrderByDescending(x => x).ToList();
             }
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"ListBackups failed: {ex.Message}");
-                return (results, $"列表失败: {ex.Message}");
+                return results;
             }
         }
 
-        public async Task<string> CreateBackupAsync(bool encrypt, string? encryptPassword)
+        public async Task<string> CreateBackupAsync(bool encrypt, string? encryptPassword, BackupOptions? options = null)
         {
+            options ??= new BackupOptions();
             string tempPath = Path.Combine(Path.GetTempPath(), $"monica_backup_{DateTime.Now:yyyyMMdd_HHmmss}");
             Directory.CreateDirectory(tempPath);
 
             try
             {
-                // 1. Fetch Data
-                var passwords = await _dbContext.PasswordEntries.ToListAsync();
+                // 1. Fetch Data (including categories)
+                var passwords = await _dbContext.PasswordEntries.Include(p => p.Category).ToListAsync();
                 var secureItems = await _dbContext.SecureItems.ToListAsync();
+                var categories = await _dbContext.Categories.ToListAsync();
 
                 // 2. Prepare Data Structure
                 // passwords/
@@ -170,9 +228,18 @@ namespace Monica.Windows.Services
                 string notesDir = Path.Combine(tempPath, "notes");
                 Directory.CreateDirectory(notesDir);
                 
-                // 3. Serialize Passwords (JSON)
+                // 3. Export categories.json
+                if (options.IncludeCategories && categories.Any())
+                {
+                    var categoryBackups = categories.Select(c => new { id = (long)c.Id, name = c.Name, sortOrder = c.SortOrder }).ToList();
+                    var categoriesJson = JsonSerializer.Serialize(categoryBackups);
+                    File.WriteAllText(Path.Combine(tempPath, "categories.json"), categoriesJson);
+                }
+                
+                // 4. Serialize Passwords (JSON) with category info
                 foreach (var pwd in passwords)
                 {
+                    if (!options.IncludePasswords) break;
                     try 
                     {
                         string decryptedPass = _securityService.Decrypt(pwd.EncryptedPassword);
@@ -185,6 +252,8 @@ namespace Monica.Windows.Services
                             website = pwd.Website,
                             notes = pwd.Notes,
                             isFavorite = pwd.IsFavorite,
+                            categoryId = pwd.CategoryId,
+                            categoryName = pwd.Category?.Name,
                             createdAt = new DateTimeOffset(pwd.CreatedAt).ToUnixTimeMilliseconds(),
                             updatedAt = new DateTimeOffset(pwd.UpdatedAt).ToUnixTimeMilliseconds()
                         };
@@ -206,7 +275,7 @@ namespace Monica.Windows.Services
                     {
                         string decryptedData = _securityService.Decrypt(item.ItemData);
                         
-                        if (item.ItemType == ItemType.Note)
+                        if (item.ItemType == ItemType.Note && options.IncludeNotes)
                         {
                             var backupEntry = new NoteBackupEntry
                             {
@@ -223,11 +292,11 @@ namespace Monica.Windows.Services
                             string fileName = $"note_{item.Id}_{backupEntry.createdAt}.json";
                             File.WriteAllText(Path.Combine(notesDir, fileName), json);
                         }
-                        else if (item.ItemType == ItemType.Totp)
+                        else if (item.ItemType == ItemType.Totp && options.IncludeTotp)
                         {
                             totpItems.Add(item);
                         }
-                        else if (item.ItemType == ItemType.BankCard || item.ItemType == ItemType.Document)
+                        else if ((item.ItemType == ItemType.BankCard || item.ItemType == ItemType.Document) && options.IncludeCards)
                         {
                             cardDocItems.Add(item);
                         }
@@ -239,7 +308,7 @@ namespace Monica.Windows.Services
                 string timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
                 
                 // 5a. Generate Password CSV (Android compatible format)
-                if (passwords.Count > 0)
+                if (options.IncludePasswords && passwords.Count > 0)
                 {
                     var pwdCsv = new StringBuilder();
                     pwdCsv.Append('\uFEFF'); // BOM
@@ -284,11 +353,14 @@ namespace Monica.Windows.Services
                 }
                 
                 // 5d. Backup images folder
-                await BackupImagesAsync(tempPath, cardDocItems);
+                if (options.IncludeImages)
+                {
+                    await BackupImagesAsync(tempPath, cardDocItems);
+                }
 
-                // 6. Zip
+                // 6. Zip (Use custom method to ensure forward slashes for cross-platform compatibility)
                 string zipPath = Path.Combine(Path.GetTempPath(), $"monica_backup_{timestamp}.zip");
-                ZipFile.CreateFromDirectory(tempPath, zipPath);
+                CreateZipWithForwardSlashes(tempPath, zipPath);
                 
                 string finalPath = zipPath;
                 string remoteFileName = Path.GetFileName(zipPath);
@@ -312,6 +384,16 @@ namespace Monica.Windows.Services
                 // Cleanup
                 try { Directory.Delete(tempPath, true); } catch { }
             }
+        }
+
+        public async Task DeleteBackupAsync(string fileName)
+        {
+            // Android stores backups in 'Monica_Backups' subfolder
+            string backupFolder = "Monica_Backups";
+            string path = $"{_serverUrl}/{backupFolder}/{fileName}";
+            var request = new HttpRequestMessage(new HttpMethod("DELETE"), path);
+            var response = await _client.SendAsync(request);
+            response.EnsureSuccessStatusCode();
         }
 
         private async Task UploadFileAsync(string localPath, string remoteName)
@@ -684,19 +766,49 @@ namespace Monica.Windows.Services
                 };
                 string data = _securityService.Decrypt(item.ItemData);
                 
-                // Extract imagePaths from itemData JSON
+                // Extract imagePaths from itemData JSON and remove it from data
+                // Android expects imagePaths as a separate field, not embedded in itemData
                 string imagePaths = "";
                 try
                 {
                     using var doc = JsonDocument.Parse(data);
-                    if (doc.RootElement.TryGetProperty("imagePaths", out var imgPathsElem))
+                    var root = doc.RootElement;
+                    
+                    // Extract imagePaths
+                    if (root.TryGetProperty("imagePaths", out var imgPathsElem))
                     {
                         imagePaths = imgPathsElem.ToString();
                     }
-                    else if (doc.RootElement.TryGetProperty("ImagePaths", out var imgPathsElem2))
+                    else if (root.TryGetProperty("ImagePaths", out var imgPathsElem2))
                     {
                         imagePaths = imgPathsElem2.ToString();
                     }
+                    
+                    // Rebuild JSON without imagePaths for Android compatibility
+                    var cleanedData = new Dictionary<string, object?>();
+                    foreach (var prop in root.EnumerateObject())
+                    {
+                        string propName = prop.Name;
+                        // Skip imagePaths since it's exported separately
+                        if (propName.Equals("imagePaths", StringComparison.OrdinalIgnoreCase) ||
+                            propName.Equals("ImagePaths", StringComparison.OrdinalIgnoreCase))
+                        {
+                            continue;
+                        }
+                        
+                        // Copy other properties
+                        cleanedData[propName] = prop.Value.ValueKind switch
+                        {
+                            JsonValueKind.String => prop.Value.GetString(),
+                            JsonValueKind.Number => prop.Value.TryGetInt64(out var l) ? l : prop.Value.GetDouble(),
+                            JsonValueKind.True => true,
+                            JsonValueKind.False => false,
+                            JsonValueKind.Null => null,
+                            _ => prop.Value.ToString()
+                        };
+                    }
+                    
+                    data = JsonSerializer.Serialize(cleanedData);
                 }
                 catch { }
                 
@@ -913,11 +1025,18 @@ namespace Monica.Windows.Services
                     long created = long.TryParse(fields[7], out var c) ? c : 0;
                     long updated = long.TryParse(fields[8], out var u) ? u : 0;
 
+                    // Skip PASSWORD type - passwords are imported from JSON files, not from CSV
+                    if (typeStr == "PASSWORD")
+                    {
+                        continue;
+                    }
+
                     ItemType type = typeStr switch {
                         "TOTP" => ItemType.Totp,
                         "BANK_CARD" => ItemType.BankCard,
                         "DOCUMENT" => ItemType.Document,
-                        _ => ItemType.Note
+                        "NOTE" => ItemType.Note,
+                        _ => ItemType.Note // Default for unknown types, but PASSWORD is skipped above
                     };
 
                     bool exists = await _dbContext.SecureItems.AnyAsync(s => s.Title == title && s.ItemType == type);
@@ -1037,6 +1156,24 @@ namespace Monica.Windows.Services
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"{indent}[ERROR] {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Create a ZIP file with forward slashes in entry paths for cross-platform compatibility.
+        /// </summary>
+        private void CreateZipWithForwardSlashes(string sourceDir, string zipPath)
+        {
+            using var archive = ZipFile.Open(zipPath, ZipArchiveMode.Create);
+            var baseDir = new DirectoryInfo(sourceDir);
+            
+            foreach (var file in baseDir.EnumerateFiles("*", SearchOption.AllDirectories))
+            {
+                // Get relative path and convert backslashes to forward slashes
+                string relativePath = Path.GetRelativePath(sourceDir, file.FullName);
+                string entryName = relativePath.Replace('\\', '/');
+                
+                archive.CreateEntryFromFile(file.FullName, entryName);
             }
         }
     }

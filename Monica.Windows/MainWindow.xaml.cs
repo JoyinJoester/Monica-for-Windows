@@ -12,6 +12,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using WinRT.Interop;
 using Microsoft.Extensions.DependencyInjection;
+using Monica.Windows.Services;
 
 namespace Monica.Windows
 {
@@ -359,12 +360,66 @@ namespace Monica.Windows
                 case "Favorites":
                     ContentFrame.Navigate(typeof(PasswordListPage), "Favorites");
                     break;
+                case "WebDAV":
+                    ContentFrame.Navigate(typeof(WebDavPage));
+                    break;
                 case "AddCategory":
                     AddCategory_Click(sender, new RoutedEventArgs());
                     break;
                 case "Settings":
                     // ContentFrame.Navigate(typeof(SettingsPage));
                     break;
+            }
+        }
+
+        private async void QuickBackup_Tapped(object sender, Microsoft.UI.Xaml.Input.TappedRoutedEventArgs e)
+        {
+            var webDavService = ((App)Application.Current).Services.GetService<IWebDavService>();
+            if (webDavService == null) return;
+
+            var progressDialog = new ContentDialog
+            {
+                Title = "快捷备份",
+                Content = new StackPanel 
+                { 
+                    Spacing = 8, 
+                    Children = 
+                    { 
+                        new TextBlock { Text = "正在上传数据..." },
+                        new ProgressBar { IsIndeterminate = true } 
+                    } 
+                },
+                XamlRoot = MainContent.XamlRoot
+            };
+
+            var _ = progressDialog.ShowAsync();
+            
+            try
+            {
+                // Full backup (default options)
+                string result = await webDavService.CreateBackupAsync(false, null, null);
+                progressDialog.Hide();
+
+                var successDialog = new ContentDialog
+                {
+                    Title = "备份成功",
+                    Content = $"备份文件已上传: {result}",
+                    CloseButtonText = "确定",
+                    XamlRoot = MainContent.XamlRoot
+                };
+                await successDialog.ShowAsync();
+            }
+            catch (Exception ex)
+            {
+                progressDialog.Hide();
+                var failDialog = new ContentDialog
+                {
+                    Title = "备份失败",
+                    Content = ex.Message,
+                    CloseButtonText = "确定",
+                    XamlRoot = MainContent.XamlRoot
+                };
+                await failDialog.ShowAsync();
             }
         }
     }

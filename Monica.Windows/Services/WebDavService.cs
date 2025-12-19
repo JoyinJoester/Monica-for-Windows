@@ -20,6 +20,7 @@ namespace Monica.Windows.Services
     {
         private readonly AppDbContext _dbContext;
         private readonly ISecurityService _securityService;
+        private readonly IImageStorageService _imageStorageService;
         private HttpClient _client;
         
         // Configuration
@@ -27,10 +28,11 @@ namespace Monica.Windows.Services
         private string _username;
         private string _password;
 
-        public WebDavService(AppDbContext dbContext, ISecurityService securityService)
+        public WebDavService(AppDbContext dbContext, ISecurityService securityService, IImageStorageService imageStorageService)
         {
             _dbContext = dbContext;
             _securityService = securityService;
+            _imageStorageService = imageStorageService;
             _client = new HttpClient();
             _client.DefaultRequestHeaders.UserAgent.ParseAdd("Monica-Windows/1.0");
         }
@@ -335,6 +337,39 @@ namespace Monica.Windows.Services
                 // 3. Unzip
                 Directory.CreateDirectory(extractPath);
                 ZipFile.ExtractToDirectory(zipPath, extractPath);
+                
+                // Debug: Log basic extracted content
+                System.Diagnostics.Debug.WriteLine($"=== RESTORE DEBUG ===");
+                System.Diagnostics.Debug.WriteLine($"Extract path: {extractPath}");
+                try
+                {
+                    System.Diagnostics.Debug.WriteLine($"Top-level files: {string.Join(", ", Directory.GetFiles(extractPath).Select(Path.GetFileName))}");
+                    System.Diagnostics.Debug.WriteLine($"Top-level folders: {string.Join(", ", Directory.GetDirectories(extractPath).Select(Path.GetFileName))}");
+                }
+                catch { }
+                
+                // Check for nested folder (sometimes zip extracts into subfolder)
+                var topDirs = Directory.GetDirectories(extractPath);
+                if (topDirs.Length >= 1 && Directory.GetFiles(extractPath).Length == 0)
+                {
+                    // Backup might be in a subfolder - check if it has the expected content
+                    foreach (var dir in topDirs)
+                    {
+                        try
+                        {
+                            // Look for CSV files or images folder in subdirs
+                            if (Directory.GetFiles(dir, "*.csv").Length > 0 || 
+                                Directory.Exists(Path.Combine(dir, "images")) ||
+                                Directory.Exists(Path.Combine(dir, "passwords")))
+                            {
+                                extractPath = dir;
+                                System.Diagnostics.Debug.WriteLine($"Found nested folder with content, adjusting to: {extractPath}");
+                                break;
+                            }
+                        }
+                        catch { }
+                    }
+                }
 
                 int imported = 0;
 
@@ -467,16 +502,73 @@ namespace Monica.Windows.Services
                     }
                 }
 
+                // 5.5 Import images from images/ folder
+                int imageCount = 0;
+                string imagesDir = Path.Combine(extractPath, "images");
+                
+                // Debug: List ALL contents at extractPath
+                System.Diagnostics.Debug.WriteLine($"=== IMAGE IMPORT DEBUG ===");
+                System.Diagnostics.Debug.WriteLine($"Extract path: {extractPath}");
+                System.Diagnostics.Debug.WriteLine($"Images dir path: {imagesDir}");
+                System.Diagnostics.Debug.WriteLine($"Images dir exists: {Directory.Exists(imagesDir)}");
+                
+                try
+                {
+                    System.Diagnostics.Debug.WriteLine($"All files in extractPath:");
+                    foreach (var f in Directory.GetFiles(extractPath))
+                        System.Diagnostics.Debug.WriteLine($"  [FILE] {Path.GetFileName(f)}");
+                    System.Diagnostics.Debug.WriteLine($"All directories in extractPath:");
+                    foreach (var d in Directory.GetDirectories(extractPath))
+                        System.Diagnostics.Debug.WriteLine($"  [DIR] {Path.GetFileName(d)}");
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Error listing extractPath: {ex.Message}");
+                }
+                
+                if (Directory.Exists(imagesDir))
+                {
+                    System.Diagnostics.Debug.WriteLine($"Found images folder: {imagesDir}");
+                    var imageFiles = Directory.GetFiles(imagesDir);
+                    System.Diagnostics.Debug.WriteLine($"Found {imageFiles.Length} image files in images folder");
+                    
+                    foreach (var imageFile in imageFiles)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"  Processing: {Path.GetFileName(imageFile)}");
+                        try
+                        {
+                            // Use the image storage service to import each image
+                            // It will handle decryption and re-encryption properly
+                            await _imageStorageService.SaveImageFromPathAsync(imageFile);
+                            imageCount++;
+                            System.Diagnostics.Debug.WriteLine($"  SUCCESS: Imported {Path.GetFileName(imageFile)}");
+                        }
+                        catch (Exception ex)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"  FAILED: {Path.GetFileName(imageFile)} - {ex.Message}");
+                        }
+                    }
+                }
+                else
+                {
+                    System.Diagnostics.Debug.WriteLine($"WARNING: images folder NOT found at: {imagesDir}");
+                }
+                System.Diagnostics.Debug.WriteLine($"=== IMAGE IMPORT COMPLETE: {imageCount} images imported ===");
+
                 // 6. Import CSVs (TOTP / Cards)
-                // Look for CSVs in root
+                // Look for CSVs in root - no imageMapping needed since we keep original filenames
                 foreach (var file in Directory.GetFiles(extractPath, "*.csv"))
                 {
                     try
                     {
+                        System.Diagnostics.Debug.WriteLine($"Processing CSV: {Path.GetFileName(file)}");
                         string content = File.ReadAllText(file);
-                        imported += await ImportCsvContent(content);
+                        imported += await ImportCsvContent(content, null);
                     }
-                    catch {}
+                    catch (Exception ex)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"Failed to process CSV: {ex.Message}");
+                    }
                 }
 
                 try
@@ -490,7 +582,7 @@ namespace Monica.Windows.Services
                     string details = inner != null ? inner.Message : ex.Message;
                     throw new Exception($"保存数据失败: {details}");
                 }
-                return $"恢复完成。成功导入 {imported} 条数据。";
+                return $"恢复完成。成功导入 {imported} 条数据，{imageCount} 张照片。";
 
             }
             finally
@@ -543,7 +635,7 @@ namespace Monica.Windows.Services
             return field;
         }
 
-        private async Task<int> ImportCsvContent(string content)
+        private async Task<int> ImportCsvContent(string content, Dictionary<string, string>? imageMapping = null)
         {
             // Reuse logic similar to DataExportImportService but simplified for internal use
             // Assume valid format as it comes from backup
@@ -608,6 +700,7 @@ namespace Monica.Windows.Services
                     string data = fields[3];
                     string notes = fields[4];
                     bool isFav = bool.TryParse(fields[5], out var f) && f;
+                    string imagePaths = fields[6]; // Column 6: ImagePaths (JSON array or comma-separated)
                     long created = long.TryParse(fields[7], out var c) ? c : 0;
                     long updated = long.TryParse(fields[8], out var u) ? u : 0;
 
@@ -621,11 +714,57 @@ namespace Monica.Windows.Services
                     bool exists = await _dbContext.SecureItems.AnyAsync(s => s.Title == title && s.ItemType == type);
                     if (!exists)
                     {
+                        // Process imagePaths - directly inject from CSV to itemData JSON
+                        // Since we copy images with original filenames, no mapping needed
+                        string processedData = data;
+                        if (!string.IsNullOrEmpty(imagePaths) && imagePaths != "[]" && (type == ItemType.Document || type == ItemType.BankCard))
+                        {
+                            try
+                            {
+                                System.Diagnostics.Debug.WriteLine($"Processing imagePaths for {title}: {imagePaths}");
+                                
+                                // Parse the imagePaths JSON array from CSV column 6
+                                var imagePathsList = JsonSerializer.Deserialize<List<string>>(imagePaths);
+                                if (imagePathsList != null && imagePathsList.Count > 0 && imagePathsList.Any(p => !string.IsNullOrEmpty(p)))
+                                {
+                                    // Filter out empty strings
+                                    var validPaths = imagePathsList.Where(p => !string.IsNullOrEmpty(p)).ToList();
+                                    
+                                    // Inject imagePaths into data JSON
+                                    using var doc = JsonDocument.Parse(data);
+                                    using var ms = new MemoryStream();
+                                    using (var writer = new Utf8JsonWriter(ms))
+                                    {
+                                        writer.WriteStartObject();
+                                        foreach (var prop in doc.RootElement.EnumerateObject())
+                                        {
+                                            // Skip existing imagePaths (we'll add fresh one)
+                                            if (prop.Name.Equals("imagePaths", StringComparison.OrdinalIgnoreCase))
+                                            {
+                                                continue;
+                                            }
+                                            prop.WriteTo(writer);
+                                        }
+                                        // Add imagePaths from CSV
+                                        writer.WritePropertyName("imagePaths");
+                                        JsonSerializer.Serialize(writer, validPaths);
+                                        writer.WriteEndObject();
+                                    }
+                                    processedData = System.Text.Encoding.UTF8.GetString(ms.ToArray());
+                                    System.Diagnostics.Debug.WriteLine($"Injected imagePaths for {title}: {string.Join(", ", validPaths)}");
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                System.Diagnostics.Debug.WriteLine($"Failed to process imagePaths for {title}: {ex.Message}");
+                            }
+                        }
+
                         _dbContext.SecureItems.Add(new SecureItem
                         {
                              Title = title,
                              ItemType = type,
-                             ItemData = _securityService.Encrypt(data),
+                             ItemData = _securityService.Encrypt(processedData),
                              Notes = notes,
                              IsFavorite = isFav,
                              CreatedAt = DateTimeOffset.FromUnixTimeMilliseconds(created).LocalDateTime,
@@ -664,6 +803,32 @@ namespace Monica.Windows.Services
             public bool isFavorite { get; set; }
             public long createdAt { get; set; } = DateTimeOffset.Now.ToUnixTimeMilliseconds();
             public long updatedAt { get; set; } = DateTimeOffset.Now.ToUnixTimeMilliseconds();
+        }
+
+        // Helper to recursively log directory contents
+        private void LogDirectoryContents(string path, int depth)
+        {
+            string indent = new string(' ', depth * 2);
+            try
+            {
+                foreach (var file in Directory.GetFiles(path))
+                {
+                    var info = new FileInfo(file);
+                    System.Diagnostics.Debug.WriteLine($"{indent}[F] {info.Name} ({info.Length} bytes)");
+                }
+                foreach (var dir in Directory.GetDirectories(path))
+                {
+                    System.Diagnostics.Debug.WriteLine($"{indent}[D] {Path.GetFileName(dir)}/");
+                    if (depth < 3) // Limit recursion depth
+                    {
+                        LogDirectoryContents(dir, depth + 1);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"{indent}[ERROR] {ex.Message}");
+            }
         }
     }
 }

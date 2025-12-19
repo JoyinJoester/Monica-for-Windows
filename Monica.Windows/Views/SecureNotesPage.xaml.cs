@@ -1,175 +1,155 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
-using Monica.Windows.Dialogs;
 using Monica.Windows.Models;
 using Monica.Windows.Services;
-using Monica.Windows.ViewModels;
 using System;
+using System.Collections.Generic;
 
 namespace Monica.Windows.Views
 {
     public sealed partial class SecureNotesPage : Page
     {
-        public SecureItemsViewModel ViewModel { get; }
-        private readonly ISecurityService _securityService;
-        private IServiceScope _scope;
+        private NotesHomeView? _homeView;
+        private readonly Dictionary<long, TabViewItem> _openNoteTabs = new();
+        private TabViewItem? _homeTab;
 
         public SecureNotesPage()
         {
             this.InitializeComponent();
-            
-            // Create a scope for this page instance
-            _scope = ((App)App.Current).Services.CreateScope();
-            ViewModel = _scope.ServiceProvider.GetRequiredService<SecureItemsViewModel>();
-            _securityService = _scope.ServiceProvider.GetRequiredService<ISecurityService>();
-            
-            ViewModel.Initialize(ItemType.Note);
             this.Loaded += SecureNotesPage_Loaded;
-            this.Unloaded += SecureNotesPage_Unloaded;
         }
 
-        private void SecureNotesPage_Unloaded(object sender, RoutedEventArgs e)
+        private void SecureNotesPage_Loaded(object sender, RoutedEventArgs e)
         {
-            _scope?.Dispose();
-        }
+            // Create Home tab (pinned, cannot close)
+            _homeView = new NotesHomeView();
+            _homeView.OpenNoteRequested += OnOpenNoteRequested;
+            _homeView.CreateNoteRequested += OnCreateNoteRequested;
 
-        private async void SecureNotesPage_Loaded(object sender, RoutedEventArgs e)
-        {
-            LoadingRing.IsActive = true;
-            await ViewModel.LoadDataAsync();
-            LoadingRing.IsActive = false;
-        }
-
-        private async void AddButton_Click(object sender, RoutedEventArgs e)
-        {
-            var dialog = new ContentDialog
+            _homeTab = new TabViewItem
             {
-                Title = "添加笔记",
-                PrimaryButtonText = "保存",
-                CloseButtonText = "取消",
-                DefaultButton = ContentDialogButton.Primary,
-                XamlRoot = this.XamlRoot
+                Header = "主页",
+                IconSource = new SymbolIconSource { Symbol = Symbol.Home },
+                IsClosable = false,
+                Content = _homeView
             };
 
-            var stack = new StackPanel { Spacing = 12 };
-            var titleBox = new TextBox { Header = "标题", PlaceholderText = "笔记标题" };
-            var contentBox = new TextBox { Header = "内容", PlaceholderText = "笔记内容", AcceptsReturn = true, Height = 120, TextWrapping = TextWrapping.Wrap };
-            stack.Children.Add(titleBox);
-            stack.Children.Add(contentBox);
-            var scrollViewer = new ScrollViewer 
-            { 
-                VerticalScrollBarVisibility = ScrollBarVisibility.Auto, 
-                Content = stack 
+            NotesTabView.TabItems.Add(_homeTab);
+            NotesTabView.SelectedItem = _homeTab;
+        }
+
+        private void OnOpenNoteRequested(SecureItem item)
+        {
+            // Check if already open
+            if (_openNoteTabs.TryGetValue(item.Id, out var existingTab))
+            {
+                NotesTabView.SelectedItem = existingTab;
+                return;
+            }
+
+            // Create new tab
+            var editor = new NoteEditorView();
+            editor.LoadNote(item);
+            editor.TitleChanged += (title) => UpdateTabHeader(item.Id, title);
+            editor.NoteSaved += () => _homeView?.RefreshData();
+
+            // Extract first line only for tab header
+            var tabTitle = GetFirstLine(item.Title);
+
+            var tab = new TabViewItem
+            {
+                Header = tabTitle,
+                IconSource = new SymbolIconSource { Symbol = Symbol.Edit },
+                Content = editor,
+                Tag = item.Id
             };
-            dialog.Content = scrollViewer;
 
-            var result = await dialog.ShowAsync();
-            if (result == ContentDialogResult.Primary)
-            {
-                if (string.IsNullOrWhiteSpace(titleBox.Text)) return;
-
-                // For Notes, we store content in ItemData (Encrypted)
-                var encryptedContent = _securityService.Encrypt(contentBox.Text);
-
-                var item = new SecureItem
-                {
-                    Title = titleBox.Text,
-                    ItemData = encryptedContent
-                };
-
-                await ViewModel.AddItemAsync(item);
-            }
+            _openNoteTabs[item.Id] = tab;
+            NotesTabView.TabItems.Add(tab);
+            NotesTabView.SelectedItem = tab;
         }
 
-        private async void DeleteButton_Click(object sender, RoutedEventArgs e)
+        private void OnCreateNoteRequested()
         {
-            if (sender is Button btn && btn.Tag is SecureItem item)
+            var editor = new NoteEditorView();
+            editor.CreateNewNote();
+            
+            var tempId = -DateTime.Now.Ticks; // Temporary negative ID for new notes
+            
+            editor.TitleChanged += (title) => UpdateTabHeader(tempId, title);
+            editor.NoteSaved += () =>
             {
-                var dialog = new ContentDialog
+                // Update the tab's tag to the real ID after save
+                var realId = editor.GetNoteId();
+                if (realId.HasValue && _openNoteTabs.ContainsKey(tempId))
                 {
-                    Title = "删除确认",
-                    Content = "确定要删除此笔记吗？",
-                    PrimaryButtonText = "删除",
-                    CloseButtonText = "取消",
-                    XamlRoot = this.XamlRoot
-                };
-                if (await dialog.ShowAsync() == ContentDialogResult.Primary)
-                {
-                    await ViewModel.DeleteItemAsync(item);
+                    var tab = _openNoteTabs[tempId];
+                    _openNoteTabs.Remove(tempId);
+                    tab.Tag = realId.Value;
+                    _openNoteTabs[realId.Value] = tab;
                 }
+                _homeView?.RefreshData();
+            };
+
+            var tab = new TabViewItem
+            {
+                Header = "新笔记",
+                IconSource = new SymbolIconSource { Symbol = Symbol.Edit },
+                Content = editor,
+                Tag = tempId
+            };
+
+            _openNoteTabs[tempId] = tab;
+            NotesTabView.TabItems.Add(tab);
+            NotesTabView.SelectedItem = tab;
+        }
+
+        private void UpdateTabHeader(long noteId, string title)
+        {
+            if (_openNoteTabs.TryGetValue(noteId, out var tab))
+            {
+                tab.Header = GetFirstLine(title);
             }
         }
 
-        private async void ViewButton_Click(object sender, RoutedEventArgs e)
+        private static string GetFirstLine(string? text)
         {
-            if (sender is Button btn && btn.Tag is SecureItem item)
-            {
-                // Decrypt and show content
-                string content;
-                try
-                {
-                    content = _securityService.Decrypt(item.ItemData);
-                }
-                catch
-                {
-                    content = "(无法解密内容)";
-                }
-
-                var dialog = new ContentDialog
-                {
-                    Title = item.Title,
-                    CloseButtonText = "关闭",
-                    XamlRoot = this.XamlRoot
-                };
-
-                var contentStack = new StackPanel { Spacing = 12, MinWidth = 400 };
-                
-                // Note content display
-                var contentText = new TextBlock
-                {
-                    Text = string.IsNullOrEmpty(content) ? "(空笔记)" : content,
-                    TextWrapping = TextWrapping.Wrap,
-                    IsTextSelectionEnabled = true,
-                    FontSize = 14,
-                    LineHeight = 24
-                };
-                
-                // Metadata
-                var metaText = new TextBlock
-                {
-                    Text = $"创建时间: {item.CreatedAt:yyyy-MM-dd HH:mm}",
-                    Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.Gray),
-                    FontSize = 12
-                };
-
-                contentStack.Children.Add(contentText);
-                contentStack.Children.Add(metaText);
-
-                dialog.Content = new ScrollViewer 
-                { 
-                    Content = contentStack, 
-                    MaxHeight = 400,
-                    VerticalScrollBarVisibility = ScrollBarVisibility.Auto
-                };
-
-                await dialog.ShowAsync();
-            }
+            if (string.IsNullOrWhiteSpace(text)) return "新笔记";
+            
+            // Get first line only
+            var firstLine = text.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+            var result = firstLine.Length > 0 ? firstLine[0].Trim() : "新笔记";
+            
+            // Limit to 20 characters for tab display
+            if (result.Length > 20) result = result.Substring(0, 20) + "...";
+            
+            return result;
         }
 
-        private void Card_PointerEntered(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+        private void NotesTabView_AddTabButtonClick(TabView sender, object args)
         {
-            if (sender is Grid grid)
-            {
-                grid.Scale = new System.Numerics.Vector3(1.01f, 1.01f, 1f);
-            }
+            OnCreateNoteRequested();
         }
 
-        private void Card_PointerExited(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+        private void NotesTabView_TabCloseRequested(TabView sender, TabViewTabCloseRequestedEventArgs args)
         {
-            if (sender is Grid grid)
+            if (args.Tab == _homeTab) return; // Cannot close home tab
+
+            if (args.Tab.Tag is long noteId)
             {
-                grid.Scale = new System.Numerics.Vector3(1f, 1f, 1f);
+                _openNoteTabs.Remove(noteId);
+            }
+
+            NotesTabView.TabItems.Remove(args.Tab);
+        }
+
+        private void NotesTabView_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            // Refresh home view when switching back to it
+            if (NotesTabView.SelectedItem == _homeTab)
+            {
+                _homeView?.RefreshData();
             }
         }
     }

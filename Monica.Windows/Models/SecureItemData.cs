@@ -90,6 +90,9 @@ namespace Monica.Windows.Models
 
         [JsonPropertyName("documentType")]
         public string DocumentTypeString { get; set; } = "ID_CARD";
+
+        [JsonPropertyName("imagePaths")]
+        public System.Collections.Generic.List<string> ImagePaths { get; set; } = new();
     }
 
     /// <summary>
@@ -130,6 +133,9 @@ namespace Monica.Windows.Models
 
         [JsonPropertyName("billingAddress")]
         public string BillingAddress { get; set; } = string.Empty;
+
+        [JsonPropertyName("imagePaths")]
+        public System.Collections.Generic.List<string> ImagePaths { get; set; } = new();
     }
 
     /// <summary>

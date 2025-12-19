@@ -33,7 +33,10 @@ namespace Monica.Windows.Models
 
         public DateTime CreatedAt { get; set; } = DateTime.Now;
         public DateTime UpdatedAt { get; set; } = DateTime.Now;
-        public bool IsFavorite { get; set; }
+
+        [ObservableProperty]
+        private bool _isFavorite;
+
         public int SortOrder { get; set; }
 
         // TOTP Display Properties (Not Mapped)

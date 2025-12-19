@@ -30,6 +30,7 @@ namespace Monica.Windows
             // Services
             services.AddSingleton<ISecurityService, SecurityService>();
             services.AddDbContext<AppDbContext>();
+            services.AddSingleton<IImageStorageService, ImageStorageService>();
             services.AddTransient<DataExportImportService>();
 
             // ViewModels

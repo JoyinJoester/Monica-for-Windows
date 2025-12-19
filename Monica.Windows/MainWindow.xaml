@@ -30,6 +30,7 @@
         <!-- Main Content (hidden until login) -->
         <Grid x:Name="MainContent" Visibility="Collapsed" Grid.Row="1">
             <NavigationView x:Name="NavView" PaneDisplayMode="Left" 
+                            IsBackButtonVisible="Collapsed"
                             SelectionChanged="NavView_SelectionChanged"
                             Margin="0,0,0,0">
                 <NavigationView.MenuItems>
@@ -37,7 +38,7 @@
                     <NavigationViewItem Icon="ProtectedDocument" Content="安全笔记" Tag="Notes" />
                     <NavigationViewItem Icon="Clock" Content="两步验证" Tag="TOTP" />
                     <NavigationViewItem Icon="ContactInfo" Content="卡包" Tag="Cards" />
-                    <NavigationViewItem Icon="OutlineStar" Content="收藏" Tag="Favorites" />
+                    <NavigationViewItem Icon="OutlineStar" Content="密码收藏" Tag="Favorites" />
                     <NavigationViewItemSeparator />
                     <!-- Category Management Header with Add Button -->
                     <NavigationViewItem x:Name="CategoriesHeader" SelectsOnInvoked="False" 

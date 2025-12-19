@@ -76,5 +76,20 @@ namespace Monica.Windows.ViewModels
                 FilteredItems = new ObservableCollection<SecureItem>(_allItems);
             }
         }
+
+        public async Task UpdateItemAsync(SecureItem item)
+        {
+            var existing = await _context.SecureItems.FindAsync(item.Id);
+            if (existing != null)
+            {
+                existing.Title = item.Title;
+                existing.Notes = item.Notes;
+                existing.ItemData = item.ItemData;
+                existing.IsFavorite = item.IsFavorite;
+                existing.UpdatedAt = DateTime.Now;
+                
+                await _context.SaveChangesAsync();
+            }
+        }
     }
 }

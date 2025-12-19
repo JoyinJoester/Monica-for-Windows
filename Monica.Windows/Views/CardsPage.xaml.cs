@@ -6,6 +6,9 @@ using Monica.Windows.Services;
 using Monica.Windows.ViewModels;
 using System;
 using System.Text.Json;
+using System.Collections.Generic;
+using Microsoft.UI.Xaml.Media.Imaging;
+using System.IO;
 
 namespace Monica.Windows.Views
 {
@@ -13,6 +16,7 @@ namespace Monica.Windows.Views
     {
         public SecureItemsViewModel ViewModel { get; }
         private readonly ISecurityService _securityService;
+        private readonly IImageStorageService _imageStorageService;
         private IServiceScope _scope;
 
         public CardsPage()
@@ -23,6 +27,7 @@ namespace Monica.Windows.Views
             _scope = ((App)App.Current).Services.CreateScope();
             ViewModel = _scope.ServiceProvider.GetRequiredService<SecureItemsViewModel>();
             _securityService = _scope.ServiceProvider.GetRequiredService<ISecurityService>();
+            _imageStorageService = _scope.ServiceProvider.GetRequiredService<IImageStorageService>();
             
             // Load both Document and BankCard types
             ViewModel.Initialize(ItemType.Document);
@@ -122,6 +127,107 @@ namespace Monica.Windows.Views
             var issuedByBox = new TextBox { Header = "签发机关", PlaceholderText = "XX公安局" };
             var notesBox = new TextBox { Header = "备注", PlaceholderText = "可选备注...", AcceptsReturn = true, Height = 60 };
             
+            // Image Upload Section - Front and Back
+            var imageHeader = new TextBlock { Text = "证件照片", Style = (Style)Application.Current.Resources["BodyStrongTextBlockStyle"] };
+            var imageGrid = new Grid { Margin = new Thickness(0, 8, 0, 0) };
+            imageGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            imageGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            
+            // Front image panel
+            var frontPanel = new StackPanel { Spacing = 8, Margin = new Thickness(0, 0, 8, 0) };
+            var frontLabel = new TextBlock { Text = "正面", FontSize = 12, HorizontalAlignment = HorizontalAlignment.Center,
+                Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["TextFillColorSecondaryBrush"] };
+            var frontImageBorder = new Border 
+            { 
+                CornerRadius = new CornerRadius(8), 
+                BorderThickness = new Thickness(1),
+                BorderBrush = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["CardStrokeColorDefaultBrush"],
+                Background = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["CardBackgroundFillColorSecondaryBrush"],
+                Height = 100,
+                Child = new FontIcon { Glyph = "\uE8B9", FontSize = 24, Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["TextFillColorSecondaryBrush"] }
+            };
+            var frontImage = new Image { Stretch = Microsoft.UI.Xaml.Media.Stretch.Uniform };
+            frontPanel.Children.Add(frontLabel);
+            frontPanel.Children.Add(frontImageBorder);
+            Grid.SetColumn(frontPanel, 0);
+            imageGrid.Children.Add(frontPanel);
+            
+            // Back image panel
+            var backPanel = new StackPanel { Spacing = 8, Margin = new Thickness(8, 0, 0, 0) };
+            var backLabel = new TextBlock { Text = "背面", FontSize = 12, HorizontalAlignment = HorizontalAlignment.Center,
+                Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["TextFillColorSecondaryBrush"] };
+            var backImageBorder = new Border 
+            { 
+                CornerRadius = new CornerRadius(8), 
+                BorderThickness = new Thickness(1),
+                BorderBrush = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["CardStrokeColorDefaultBrush"],
+                Background = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["CardBackgroundFillColorSecondaryBrush"],
+                Height = 100,
+                Child = new FontIcon { Glyph = "\uE8B9", FontSize = 24, Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["TextFillColorSecondaryBrush"] }
+            };
+            var backImage = new Image { Stretch = Microsoft.UI.Xaml.Media.Stretch.Uniform };
+            backPanel.Children.Add(backLabel);
+            backPanel.Children.Add(backImageBorder);
+            Grid.SetColumn(backPanel, 1);
+            imageGrid.Children.Add(backPanel);
+            
+            global::Windows.Storage.StorageFile? frontFile = null;
+            global::Windows.Storage.StorageFile? backFile = null;
+            
+            // Update back panel visibility based on document type
+            typeCombo.SelectionChanged += (s, e) =>
+            {
+                var selected = (typeCombo.SelectedItem as ComboBoxItem)?.Tag?.ToString();
+                // Passport only needs 1 image (front only)
+                backPanel.Visibility = (selected == "PASSPORT") ? Visibility.Collapsed : Visibility.Visible;
+            };
+            
+            frontImageBorder.Tapped += async (s, e) =>
+            {
+                var picker = new global::Windows.Storage.Pickers.FileOpenPicker();
+                var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(App.MainWindow);
+                WinRT.Interop.InitializeWithWindow.Initialize(picker, hwnd);
+                picker.ViewMode = global::Windows.Storage.Pickers.PickerViewMode.Thumbnail;
+                picker.SuggestedStartLocation = global::Windows.Storage.Pickers.PickerLocationId.PicturesLibrary;
+                picker.FileTypeFilter.Add(".jpg");
+                picker.FileTypeFilter.Add(".jpeg");
+                picker.FileTypeFilter.Add(".png");
+
+                var file = await picker.PickSingleFileAsync();
+                if (file != null)
+                {
+                    frontFile = file;
+                    using var stream = await file.OpenReadAsync();
+                    var bitmap = new BitmapImage();
+                    await bitmap.SetSourceAsync(stream);
+                    frontImage.Source = bitmap;
+                    frontImageBorder.Child = frontImage;
+                }
+            };
+            
+            backImageBorder.Tapped += async (s, e) =>
+            {
+                var picker = new global::Windows.Storage.Pickers.FileOpenPicker();
+                var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(App.MainWindow);
+                WinRT.Interop.InitializeWithWindow.Initialize(picker, hwnd);
+                picker.ViewMode = global::Windows.Storage.Pickers.PickerViewMode.Thumbnail;
+                picker.SuggestedStartLocation = global::Windows.Storage.Pickers.PickerLocationId.PicturesLibrary;
+                picker.FileTypeFilter.Add(".jpg");
+                picker.FileTypeFilter.Add(".jpeg");
+                picker.FileTypeFilter.Add(".png");
+
+                var file = await picker.PickSingleFileAsync();
+                if (file != null)
+                {
+                    backFile = file;
+                    using var stream = await file.OpenReadAsync();
+                    var bitmap = new BitmapImage();
+                    await bitmap.SetSourceAsync(stream);
+                    backImage.Source = bitmap;
+                    backImageBorder.Child = backImage;
+                }
+            };
+            
             stack.Children.Add(typeCombo);
             stack.Children.Add(titleBox);
             stack.Children.Add(numberBox);
@@ -130,6 +236,8 @@ namespace Monica.Windows.Views
             stack.Children.Add(expiryDateBox);
             stack.Children.Add(issuedByBox);
             stack.Children.Add(notesBox);
+            stack.Children.Add(imageHeader);
+            stack.Children.Add(imageGrid);
             
             var scrollViewer = new ScrollViewer 
             { 
@@ -146,6 +254,19 @@ namespace Monica.Windows.Views
 
                 var selectedType = (typeCombo.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "ID_CARD";
                 
+                // Save images (front and optionally back)
+                var savedImagePaths = new List<string>();
+                if (frontFile != null)
+                {
+                    var path = await _imageStorageService.SaveImageAsync(frontFile);
+                    savedImagePaths.Add(path);
+                }
+                if (backFile != null && selectedType != "PASSPORT")
+                {
+                    var path = await _imageStorageService.SaveImageAsync(backFile);
+                    savedImagePaths.Add(path);
+                }
+
                 var docData = new DocumentData
                 {
                     DocumentNumber = numberBox.Text.Trim(),
@@ -153,7 +274,8 @@ namespace Monica.Windows.Views
                     IssuedDate = issuedDateBox.Text.Trim(),
                     ExpiryDate = expiryDateBox.Text.Trim(),
                     IssuedBy = issuedByBox.Text.Trim(),
-                    DocumentTypeString = selectedType
+                    DocumentTypeString = selectedType,
+                    ImagePaths = savedImagePaths
                 };
 
                 var json = JsonSerializer.Serialize(docData);
@@ -239,6 +361,99 @@ namespace Monica.Windows.Views
             var cvvBox = new PasswordBox { Header = "CVV/安全码", PlaceholderText = "3位数字" };
             var notesBox = new TextBox { Header = "备注", PlaceholderText = "可选备注...", AcceptsReturn = true, Height = 60 };
             
+            // Image Upload Section - Front and Back
+            var imageHeader = new TextBlock { Text = "银行卡照片", Style = (Style)Application.Current.Resources["BodyStrongTextBlockStyle"] };
+            var imageGrid = new Grid { Margin = new Thickness(0, 8, 0, 0) };
+            imageGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            imageGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            
+            // Front image panel
+            var bcFrontPanel = new StackPanel { Spacing = 8, Margin = new Thickness(0, 0, 8, 0) };
+            var bcFrontLabel = new TextBlock { Text = "正面", FontSize = 12, HorizontalAlignment = HorizontalAlignment.Center,
+                Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["TextFillColorSecondaryBrush"] };
+            var bcFrontImageBorder = new Border 
+            { 
+                CornerRadius = new CornerRadius(8), 
+                BorderThickness = new Thickness(1),
+                BorderBrush = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["CardStrokeColorDefaultBrush"],
+                Background = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["CardBackgroundFillColorSecondaryBrush"],
+                Height = 100,
+                Child = new FontIcon { Glyph = "\uE8B9", FontSize = 24, Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["TextFillColorSecondaryBrush"] }
+            };
+            var bcFrontImage = new Image { Stretch = Microsoft.UI.Xaml.Media.Stretch.Uniform };
+            bcFrontPanel.Children.Add(bcFrontLabel);
+            bcFrontPanel.Children.Add(bcFrontImageBorder);
+            Grid.SetColumn(bcFrontPanel, 0);
+            imageGrid.Children.Add(bcFrontPanel);
+            
+            // Back image panel
+            var bcBackPanel = new StackPanel { Spacing = 8, Margin = new Thickness(8, 0, 0, 0) };
+            var bcBackLabel = new TextBlock { Text = "背面", FontSize = 12, HorizontalAlignment = HorizontalAlignment.Center,
+                Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["TextFillColorSecondaryBrush"] };
+            var bcBackImageBorder = new Border 
+            { 
+                CornerRadius = new CornerRadius(8), 
+                BorderThickness = new Thickness(1),
+                BorderBrush = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["CardStrokeColorDefaultBrush"],
+                Background = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["CardBackgroundFillColorSecondaryBrush"],
+                Height = 100,
+                Child = new FontIcon { Glyph = "\uE8B9", FontSize = 24, Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["TextFillColorSecondaryBrush"] }
+            };
+            var bcBackImage = new Image { Stretch = Microsoft.UI.Xaml.Media.Stretch.Uniform };
+            bcBackPanel.Children.Add(bcBackLabel);
+            bcBackPanel.Children.Add(bcBackImageBorder);
+            Grid.SetColumn(bcBackPanel, 1);
+            imageGrid.Children.Add(bcBackPanel);
+            
+            global::Windows.Storage.StorageFile? bcFrontFile = null;
+            global::Windows.Storage.StorageFile? bcBackFile = null;
+            
+            bcFrontImageBorder.Tapped += async (s, ev) =>
+            {
+                var picker = new global::Windows.Storage.Pickers.FileOpenPicker();
+                var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(App.MainWindow);
+                WinRT.Interop.InitializeWithWindow.Initialize(picker, hwnd);
+                picker.ViewMode = global::Windows.Storage.Pickers.PickerViewMode.Thumbnail;
+                picker.SuggestedStartLocation = global::Windows.Storage.Pickers.PickerLocationId.PicturesLibrary;
+                picker.FileTypeFilter.Add(".jpg");
+                picker.FileTypeFilter.Add(".jpeg");
+                picker.FileTypeFilter.Add(".png");
+
+                var file = await picker.PickSingleFileAsync();
+                if (file != null)
+                {
+                    bcFrontFile = file;
+                    using var stream = await file.OpenReadAsync();
+                    var bitmap = new BitmapImage();
+                    await bitmap.SetSourceAsync(stream);
+                    bcFrontImage.Source = bitmap;
+                    bcFrontImageBorder.Child = bcFrontImage;
+                }
+            };
+            
+            bcBackImageBorder.Tapped += async (s, ev) =>
+            {
+                var picker = new global::Windows.Storage.Pickers.FileOpenPicker();
+                var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(App.MainWindow);
+                WinRT.Interop.InitializeWithWindow.Initialize(picker, hwnd);
+                picker.ViewMode = global::Windows.Storage.Pickers.PickerViewMode.Thumbnail;
+                picker.SuggestedStartLocation = global::Windows.Storage.Pickers.PickerLocationId.PicturesLibrary;
+                picker.FileTypeFilter.Add(".jpg");
+                picker.FileTypeFilter.Add(".jpeg");
+                picker.FileTypeFilter.Add(".png");
+
+                var file = await picker.PickSingleFileAsync();
+                if (file != null)
+                {
+                    bcBackFile = file;
+                    using var stream = await file.OpenReadAsync();
+                    var bitmap = new BitmapImage();
+                    await bitmap.SetSourceAsync(stream);
+                    bcBackImage.Source = bitmap;
+                    bcBackImageBorder.Child = bcBackImage;
+                }
+            };
+            
             stack.Children.Add(cardTypeCombo);
             stack.Children.Add(titleBox);
             stack.Children.Add(bankNameBox);
@@ -247,6 +462,8 @@ namespace Monica.Windows.Views
             stack.Children.Add(expiryPanel);
             stack.Children.Add(cvvBox);
             stack.Children.Add(notesBox);
+            stack.Children.Add(imageHeader);
+            stack.Children.Add(imageGrid);
             
             var scrollViewer = new ScrollViewer 
             { 
@@ -263,6 +480,19 @@ namespace Monica.Windows.Views
 
                 var selectedType = (cardTypeCombo.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "DEBIT";
                 
+                // Save images
+                var savedImagePaths = new List<string>();
+                if (bcFrontFile != null)
+                {
+                    var path = await _imageStorageService.SaveImageAsync(bcFrontFile);
+                    savedImagePaths.Add(path);
+                }
+                if (bcBackFile != null)
+                {
+                    var path = await _imageStorageService.SaveImageAsync(bcBackFile);
+                    savedImagePaths.Add(path);
+                }
+                
                 var cardData = new BankCardData
                 {
                     CardNumber = cardNumberBox.Text.Trim().Replace(" ", ""),
@@ -271,7 +501,8 @@ namespace Monica.Windows.Views
                     ExpiryYear = ((int)expiryYearBox.Value).ToString(),
                     Cvv = cvvBox.Password,
                     BankName = bankNameBox.Text.Trim(),
-                    CardTypeString = selectedType
+                    CardTypeString = selectedType,
+                    ImagePaths = savedImagePaths
                 };
 
                 var json = JsonSerializer.Serialize(cardData);
@@ -314,5 +545,14 @@ namespace Monica.Windows.Views
                 }
             }
         }
+        private void CardsListView_ItemClick(object sender, ItemClickEventArgs e)
+        {
+            if (e.ClickedItem is SecureItem item)
+            {
+                // Navigate to CardDetailPage instead of showing a dialog
+                Frame.Navigate(typeof(CardDetailPage), item);
+            }
+        }
     }
 }
+

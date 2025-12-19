@@ -8,6 +8,7 @@ using Monica.Windows.Services;
 using Monica.Windows.ViewModels;
 using Windows.ApplicationModel.DataTransfer;
 using System;
+using System.Collections.Generic;
 using System.Linq;
 
 namespace Monica.Windows.Views
@@ -270,6 +271,26 @@ namespace Monica.Windows.Views
             }
         }
 
+        // Context menu opening - update favorite text dynamically
+        private void ContextMenuFlyout_Opening(object sender, object e)
+        {
+            if (sender is MenuFlyout flyout && flyout.Items.Count > 0)
+            {
+                // Find the FavoriteMenuItem and update its text based on the item's current state
+                foreach (var item in flyout.Items)
+                {
+                    if (item is MenuFlyoutItem mfi && mfi.Tag is PasswordEntry entry)
+                    {
+                        // Update favorite menu item text
+                        if (mfi.Text.Contains("收藏"))
+                        {
+                            mfi.Text = entry.IsFavorite ? "取消收藏" : "收藏";
+                        }
+                    }
+                }
+            }
+        }
+
         // Toggle favorite
         private async void ToggleFavorite_Click(object sender, RoutedEventArgs e)
         {
@@ -281,36 +302,122 @@ namespace Monica.Windows.Views
             }
         }
 
+        // Custom multi-select state
+        private bool _isMultiSelectMode = false;
+        private readonly HashSet<PasswordEntry> _selectedItems = new();
+        private readonly Dictionary<PasswordEntry, Grid> _cardGrids = new();
+
         // Enter multi-select mode
         private void EnterMultiSelect_Click(object sender, RoutedEventArgs e)
         {
-            PasswordListView.SelectionMode = ListViewSelectionMode.Multiple;
+            _isMultiSelectMode = true;
             MultiSelectToolbar.Visibility = Visibility.Visible;
+            _selectedItems.Clear();
+            _cardGrids.Clear();
             
-            // Select the clicked item
+            // Select the clicked item and find its Grid
             if (sender is MenuFlyoutItem mfi && mfi.Tag is PasswordEntry entry)
             {
-                PasswordListView.SelectedItems.Add(entry);
+                _selectedItems.Add(entry);
+                
+                // Find the Grid in the ListView for this item
+                var container = PasswordListView.ContainerFromItem(entry) as ListViewItem;
+                if (container != null)
+                {
+                    var grid = FindChildGrid(container);
+                    if (grid != null)
+                    {
+                        grid.BorderBrush = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AccentFillColorDefaultBrush"];
+                        _cardGrids[entry] = grid;
+                    }
+                }
             }
+            
+            UpdateSelectedCount();
+        }
+
+        private Grid? FindChildGrid(DependencyObject parent)
+        {
+            for (int i = 0; i < Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChildrenCount(parent); i++)
+            {
+                var child = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChild(parent, i);
+                if (child is Grid grid && grid.Name == "CardGrid")
+                {
+                    return grid;
+                }
+                var result = FindChildGrid(child);
+                if (result != null) return result;
+            }
+            return null;
         }
 
         private void CancelMultiSelect_Click(object sender, RoutedEventArgs e)
         {
-            PasswordListView.SelectionMode = ListViewSelectionMode.None;
+            _isMultiSelectMode = false;
             MultiSelectToolbar.Visibility = Visibility.Collapsed;
-            PasswordListView.SelectedItems.Clear();
+            
+            // Reset all card borders
+            foreach (var kvp in _cardGrids)
+            {
+                kvp.Value.BorderBrush = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["CardStrokeColorDefaultBrush"];
+            }
+            _selectedItems.Clear();
+            _cardGrids.Clear();
+        }
+
+        private void CardGrid_PointerPressed(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+        {
+            if (!_isMultiSelectMode) return;
+            
+            // Only respond to left click
+            var props = e.GetCurrentPoint(null).Properties;
+            if (!props.IsLeftButtonPressed) return;
+            
+            if (sender is Grid grid && grid.DataContext is PasswordEntry entry)
+            {
+                ToggleItemSelection(entry, grid);
+                e.Handled = true;
+            }
+        }
+
+        private void ToggleItemSelection(PasswordEntry entry, Grid? grid = null)
+        {
+            if (_selectedItems.Contains(entry))
+            {
+                _selectedItems.Remove(entry);
+                if (grid != null)
+                {
+                    grid.BorderBrush = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["CardStrokeColorDefaultBrush"];
+                    _cardGrids.Remove(entry);
+                }
+            }
+            else
+            {
+                _selectedItems.Add(entry);
+                if (grid != null)
+                {
+                    grid.BorderBrush = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AccentFillColorDefaultBrush"];
+                    _cardGrids[entry] = grid;
+                }
+            }
+            UpdateSelectedCount();
+        }
+
+        private void UpdateSelectedCount()
+        {
+            SelectedCountText.Text = $"已选 {_selectedItems.Count} 项";
         }
 
         private void PasswordListView_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
-            SelectedCountText.Text = $"已选 {PasswordListView.SelectedItems.Count} 项";
+            // No longer used - we manage selection manually
         }
 
         // Batch favorite
         private async void BatchFavorite_Click(object sender, RoutedEventArgs e)
         {
             int count = 0;
-            foreach (var item in PasswordListView.SelectedItems.OfType<PasswordEntry>())
+            foreach (var item in _selectedItems.ToList())
             {
                 if (!item.IsFavorite)
                 {
@@ -354,7 +461,7 @@ namespace Monica.Windows.Views
             {
                 var selectedCategory = categories[comboBox.SelectedIndex];
                 int count = 0;
-                foreach (var item in PasswordListView.SelectedItems.OfType<PasswordEntry>())
+                foreach (var item in _selectedItems.ToList())
                 {
                     if (item.CategoryId != selectedCategory.Id)
                     {
@@ -371,7 +478,7 @@ namespace Monica.Windows.Views
         // Batch delete
         private async void BatchDelete_Click(object sender, RoutedEventArgs e)
         {
-            var selectedItems = PasswordListView.SelectedItems.OfType<PasswordEntry>().ToList();
+            var selectedItems = _selectedItems.ToList();
             if (selectedItems.Count == 0) return;
 
             var dialog = new ContentDialog

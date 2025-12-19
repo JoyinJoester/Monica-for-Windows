@@ -38,7 +38,9 @@
         <!-- Card List -->
         <ListView x:Name="CardsListView" Grid.Row="1" 
                   ItemsSource="{x:Bind ViewModel.FilteredItems, Mode=OneWay}"
-                  SelectionMode="None">
+                  SelectionMode="None"
+                  IsItemClickEnabled="True"
+                  ItemClick="CardsListView_ItemClick">
             <ListView.ItemContainerStyle>
                 <Style TargetType="ListViewItem">
                     <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
